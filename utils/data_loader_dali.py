@@ -1,15 +1,10 @@
 import logging
 import torch
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torch import Tensor
 
 # concurrent futures
 import concurrent.futures as cf
-
-# distributed stuff
-import torch.distributed as dist
-from utils import comm
 
 # dali stuff
 from nvidia.dali.pipeline import Pipeline
@@ -21,13 +16,10 @@ from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 import utils.dali_es_helper as esh
 
 
-def get_data_loader(params, files_pattern, distributed, train):
+def get_data_loader(params, files_pattern, train):
     dataloader = DaliDataLoader(params, files_pattern, train)
 
-    if train:
-        return dataloader, None, None
-    else:
-        return dataloader, None
+    return dataloader, None
 
 
 class DaliDataLoader(object):
@@ -52,8 +44,6 @@ class DaliDataLoader(object):
                     self.img_size,
                     self.n_in_channels,
                     self.n_out_channels,
-                    self.num_shards,
-                    self.shard_id,
                     self.limit_nsamples,
                     enable_logging=False,
                     seed=self.global_seed,
@@ -93,14 +83,7 @@ class DaliDataLoader(object):
 
     def __init__(self, params, location, train, seed=333):
         # set up seeds
-        # this one is the same on all ranks
         self.global_seed = seed
-        # this one is the same for all ranks of the same model
-        model_id = comm.get_world_rank() // comm.get_size("tp-cp-pp")
-        self.model_seed = self.global_seed + model_id
-        # this seed is supposed to be diffferent for every rank
-        self.local_seed = self.global_seed + comm.get_world_rank()
-
         self.num_data_workers = params.num_data_workers
         self.device_index = torch.cuda.current_device()
         self.batch_size = int(params.local_batch_size)
@@ -126,14 +109,6 @@ class DaliDataLoader(object):
         self.out_bias = means
         self.out_scale = stds
 
-        # set sharding
-        if dist.is_initialized():
-            self.num_shards = params.data_num_shards
-            self.shard_id = params.data_shard_id
-        else:
-            self.num_shards = 1
-            self.shard_id = 0
-
         # get img source data
         extsource = esh.ERA5ES(
             self.location,
@@ -143,8 +118,6 @@ class DaliDataLoader(object):
             self.img_size,
             self.n_in_channels,
             self.n_out_channels,
-            self.num_shards,
-            self.shard_id,
             self.limit_nsamples,
             seed=self.global_seed,
         )

@@ -17,8 +17,6 @@ class ERA5ES(object):
         img_size,
         n_in_channels,
         n_out_channels,
-        num_shards,
-        shard_id,
         limit_nsamples,
         enable_logging=True,
         seed=333,
@@ -31,8 +29,6 @@ class ERA5ES(object):
         self.n_in_channels = n_in_channels
         self.n_out_channels = n_out_channels
         self.rng = np.random.default_rng(seed=seed)
-        self.num_shards = num_shards
-        self.shard_id = shard_id
         self.limit_nsamples = limit_nsamples
 
         self._get_files_stats(enable_logging)
@@ -56,13 +52,12 @@ class ERA5ES(object):
                 and self.img_shape_y <= _f["fields"].shape[3]
             ), "image shapes are greater than dataset image shapes"
 
-        self.n_samples_total = self.n_years * self.n_samples_per_year
+        self.n_samples = self.n_years * self.n_samples_per_year
         if self.limit_nsamples is not None:
-            self.n_samples_total = min(self.n_samples_total, self.limit_nsamples)
+            self.n_samples = min(self.n_samples, self.limit_nsamples)
             logging.info(
-                "Overriding total number of samples to: {}".format(self.n_samples_total)
+                "Overriding total number of samples to: {}".format(self.n_samples)
             )
-        self.n_samples_shard = self.n_samples_total // self.num_shards
         self.files = [None for _ in range(self.n_years)]
         self.dsets = [None for _ in range(self.n_years)]
         if enable_logging:
@@ -72,19 +67,14 @@ class ERA5ES(object):
             logging.info(
                 "Found data at path {}. Number of examples: {}. Image Shape: {} x {} x {}".format(
                     self.location,
-                    self.n_samples_total,
+                    self.n_samples,
                     self.img_shape_x,
                     self.img_shape_y,
                     self.n_in_channels,
                 )
             )
-            if self.num_shards > 1:
-                logging.info(
-                    "Using shards of size {} per rank".format(self.n_samples_shard)
-                )
-
         # number of steps per epoch
-        self.num_steps_per_epoch = self.n_samples_shard // self.batch_size
+        self.num_steps_per_epoch = self.n_samples // self.batch_size
         self.last_epoch = None
 
         self.index_permutation = None
@@ -112,7 +102,7 @@ class ERA5ES(object):
         ]
 
     def __len__(self):
-        return self.n_samples_shard
+        return self.n_samples
 
     def __del__(self):
         for f in self.files:
@@ -128,14 +118,9 @@ class ERA5ES(object):
         if sample_info.epoch_idx != self.last_epoch:
             self.last_epoch = sample_info.epoch_idx
             if self.shuffle:
-                self.index_permutation = self.rng.permutation(self.n_samples_total)
+                self.index_permutation = self.rng.permutation(self.n_samples)
             else:
-                self.index_permutation = np.arange(self.n_samples_total)
-            # shard the data
-            start = self.n_samples_shard * self.shard_id
-            end = start + self.n_samples_shard
-            self.index_permutation = self.index_permutation[start:end]
-
+                self.index_permutation = np.arange(self.n_samples)
         # determine local and sample idx
         sample_idx = self.index_permutation[sample_info.idx_in_epoch]
         year_idx = int(sample_idx / self.n_samples_per_year)  # which year we are on

@@ -6,7 +6,6 @@ base: &base
   dropout: 0.0
   patch_size: 8
   num_heads: 8
-  model_backend: 'pytorch'
 
   # Training config
   img_size: [360, 720]
@@ -36,9 +35,6 @@ base: &base
   limit_nsamples: None
   limit_nsamples_val: None
 
-  # Comms
-  wireup_info: env
-  wireup_store: tcp
 
 # limit the number of samples
 short: &short_ls
@@ -65,98 +61,3 @@ opt: &opt
   num_iters: 30000
   enable_jit: true
   enable_fused: true
-
-# ----- Data parallel scaling configs
-bs16_opt:
-  <<: *opt
-  global_batch_size: 16
-  lr: 5e-4
-
-bs32_opt:
-  <<: *opt
-  global_batch_size: 32
-  lr: 7.07e-4
-
-bs64_opt:
-  <<: *opt
-  global_batch_size: 64
-  lr: 1e-3
-
-bs64_opt_short:
-  <<: *opt
-  global_batch_size: 64
-  lr: 1e-3
-  limit_nsamples: 2048
-  limit_nsamples_val: 2048
-  num_iters: 128
-
-bs128_opt:
-  <<: *opt
-  global_batch_size: 128
-  lr: 1.41e-3
-
-bs256_opt:
-  <<: *opt
-  global_batch_size: 256
-  lr: 2e-3
-
-bs512_opt:
-  <<: *opt
-  global_batch_size: 512
-  lr: 2.83e-3
-
-bs1024_opt:
-  <<: *opt
-  global_batch_size: 1024
-  lr: 4e-3
-
-bs2048_opt:
-  <<: *opt
-  global_batch_size: 2048
-  lr: 5.66e-3
-
-# Model parallel configs
-mp: &mp
-  <<: *base
-  num_iters: 30000
-  global_batch_size: 64
-  lr: 1e-3
-  num_data_workers: 8
-  embed_dim: 1024 # change to bigger model
-  data_loader_config: 'dali'
-  amp_mode: fp16
-  enable_jit: false
-  enable_fused: true
-
-mp_te:
-  <<: *mp
-  model_backend: 'transformer-engine'
-  enable_jit: false
-
-mp_short:
-  <<: *mp
-  limit_nsamples: 2048
-  limit_nsamples_val: 2048
-  num_iters: 128
-
-mp_te_short:
-  <<: *mp
-  model_backend: 'transformer-engine'
-  limit_nsamples: 2048
-  limit_nsamples_val: 2048
-  num_iters: 128
-
-mp_bs16:
-  <<: *mp
-  global_batch_size: 16
-  lr: 5e-4
-
-mp_bs32:
-  <<: *mp
-  global_batch_size: 32
-  lr: 7.07e-4
-
-# larger seq length (use local bs = 1 here)
-mp_patch4:
-  <<: *mp
-  patch_size: 4

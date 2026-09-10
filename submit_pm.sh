@@ -7,7 +7,7 @@
 #SBATCH --gpu-bind none
 #SBATCH --time=01:00:00
 #SBATCH --image=nersc/pytorch:25.06.01
-#SBATCH --module=gpu,nccl-plugin
+#SBATCH --module=gpu
 #SBATCH -J vit-era5
 #SBATCH -o %x-%j.out
 
@@ -16,7 +16,6 @@ LOGDIR=${SCRATCH}/sc25-dl-tutorial/logs
 mkdir -p ${LOGDIR}
 args="${@}"
 
-export FI_MR_CACHE_MONITOR=userfaultfd
 export HDF5_USE_FILE_LOCKING=FALSE
 
 # Profiling
@@ -27,15 +26,11 @@ if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     export PROFILE_CMD="nsys profile $NSYS_ARGS -o $NSYS_OUTPUT"
 fi
 
-export MASTER_ADDR=$(hostname)
 
-# Reversing order of GPUs to match default CPU affinities from Slurm
-export CUDA_VISIBLE_DEVICES=3,2,1,0
 
 set -x
 srun -u shifter -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
     --env PYTHONUSERBASE=${LOGDIR} \
     bash -c "
-    source export_DDP_vars.sh
     ${PROFILE_CMD} python train.py ${args}
     "

@@ -4,18 +4,6 @@ import torch.nn as nn
 from functools import partial
 from networks.helpers import DropPath, trunc_normal_
 
-# mp stuff
-from utils import comm
-from distributed.layers import (
-    DistributedMatmul,
-    DistributedMLP,
-    DistributedAttention,
-    DistributedLayerNorm,
-)
-from distributed.helpers import compute_split_shapes
-from distributed.mappings import scatter_to_parallel_region, gather_from_parallel_region
-
-
 class MLP(nn.Module):
     def __init__(
         self,
@@ -98,53 +86,27 @@ class Block(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
-        cp_shapes=None,
     ):
         super().__init__()
 
         mlp_hidden_dim = int(dim * mlp_ratio)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        if (comm.get_size("tp-cp")) > 1:
-            # model parallelism is on, distribute the layers
-            # tp: tensor parallel shards the weights
-            # cp: context parallel shards the sequence
-            self.norm1 = DistributedLayerNorm(dim, comm_tp_name="tp", comm_cp_name="cp")
-            self.norm2 = DistributedLayerNorm(dim, comm_tp_name="tp", comm_cp_name="cp")
-            self.attn = DistributedAttention(
-                dim,
-                num_heads=num_heads,
-                qkv_bias=qkv_bias,
-                attn_drop=attn_drop,
-                proj_drop=drop,
-                comm_tp_name="tp",
-                comm_cp_name="cp",
-                cp_shapes=cp_shapes,
-            )
-            self.mlp = DistributedMLP(
-                in_features=dim,
-                hidden_features=mlp_hidden_dim,
-                act_layer=act_layer,
-                drop=drop,
-                comm_tp_name="tp",
-                comm_cp_name="cp",
-            )
-        else:
-            self.norm1 = norm_layer(dim)
-            self.norm2 = norm_layer(dim)
-            self.attn = Attention(
-                dim,
-                num_heads=num_heads,
-                qkv_bias=qkv_bias,
-                attn_drop=attn_drop,
-                proj_drop=drop,
-            )
-            self.mlp = MLP(
-                in_features=dim,
-                hidden_features=mlp_hidden_dim,
-                act_layer=act_layer,
-                drop=drop,
-            )
+        self.norm1 = norm_layer(dim)
+        self.norm2 = norm_layer(dim)
+        self.attn = Attention(
+            dim,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            attn_drop=attn_drop,
+            proj_drop=drop,
+        )
+        self.mlp = MLP(
+            in_features=dim,
+            hidden_features=mlp_hidden_dim,
+            act_layer=act_layer,
+            drop=drop,
+        )
 
     def forward(self, x):
         y = self.attn(self.norm1(x))
@@ -209,9 +171,6 @@ class VisionTransformer(nn.Module):
         )
         num_patches = self.patch_embed.num_patches
 
-        # if context parallel, split the sequence/context
-        self.cp_shapes = compute_split_shapes(num_patches, comm.get_size("cp"))
-
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, self.embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
@@ -230,16 +189,12 @@ class VisionTransformer(nn.Module):
                     attn_drop=attn_drop_rate,
                     drop_path=dpr[i],
                     norm_layer=norm_layer,
-                    cp_shapes=self.cp_shapes,
                 )
                 for i in range(depth)
             ]
         )
 
-        if (comm.get_size("tp-cp")) > 1:
-            self.norm = DistributedLayerNorm(embed_dim, comm_tp_name="tp", comm_cp_name="cp")
-        else:   
-            self.norm = norm_layer(embed_dim)
+        self.norm = norm_layer(embed_dim)
 
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 
@@ -280,16 +235,9 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
         x = self.prepare_tokens(x)
 
-        # split sequence if cp is on (shape of x is (batch, seq, embed))
-        x = scatter_to_parallel_region(x, dim=1, comm_name="cp")
-
-        # if cp is on, each block operates on a sequence shard
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-
-        # gather sequence if cp is on
-        x = gather_from_parallel_region(x, dim=1, shapes=self.cp_shapes, comm_name="cp")
 
         x = self.forward_head(x)
         return x
