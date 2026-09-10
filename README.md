@@ -1,6 +1,6 @@
 # SC26 Deep Learning at Scale Tutorial
 
-This repository contains the example code material for the SC25 tutorial:
+This repository contains the example code material for the SC26 tutorial:
 *Deep Learning at Scale*.
 
 **Contents**
@@ -35,16 +35,16 @@ This will open up a session on a Perlmutter login node, from which you can submi
 
 To begin, start a terminal from JupyterHub and clone this repository with:
 ```bash
-git clone https://github.com/NERSC/sc25-dl-tutorial.git
+git clone https://github.com/NERSC/sc26-dl-tutorial.git
 ```
 You can use the Jupyter file browser to view and edit source files and scripts. For all of the example commands provided below, make sure you are running them from within the top-level folder of the repository. In your terminal, change to the directory with
 ```bash
-cd sc25-dl-tutorial
+cd sc26-dl-tutorial
 ```
 
 For running slurm jobs on Perlmutter, we will use training accounts which are provided under the `ntrain5` project. The slurm script `submit_pm.sh` included in the repository is configured to work automatically as is, but if you submit your own custom jobs via `salloc` or `sbatch` you must include the following flags for slurm:
 * `-A ntrain5` is required for training accounts
-* `--reservation=<reservation_name>` is required to access the set of GPU nodes we have reserved for the duration of the tutorial. For the morning  session use `<reservation_name>` set to `sc25_dl_tutorial_1`, and for the afternoon session use `<reservation_name>` set to `sc25_dl_tutorial_2` (we have two different size reservations for the single-GPU and multi-GPU sections respectively)
+* `--reservation=<reservation_name>` is required to access the set of GPU nodes we have reserved for the duration of the tutorial. For the morning  session use `<reservation_name>` set to `sc26_dl_tutorial_1`, and for the afternoon session use `<reservation_name>` set to `sc26_dl_tutorial_2` (we have two different size reservations for the single-GPU and multi-GPU sections respectively)
 
 The code can be run using the `nersc/pytorch:25.06.01` docker container. On Perlmutter, docker containers are run via
 [shifter](https://docs.nersc.gov/development/containers/shifter/), and this container is already downloaded and automatically invoked by our job submission scripts. Our container is based on the [NVIDIA NGC 25.06 pytorch container](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-06.html), with a few additional packages added.
@@ -115,8 +115,8 @@ Note that, to run this, you would submit your job with `--config=base`.
 We want to compare our training results against the `base` config baseline, and TensorBoard makes this easy as long as all training runs are stored in the same place. 
 To copy the example TensorBoard log to the scratch directory where our training jobs will output their logs, do
 ```
-mkdir -p $SCRATCH/sc25-dl-tutorial/logs
-cp -r ./example_logs/base $SCRATCH/sc25-dl-tutorial/logs
+mkdir -p $SCRATCH/sc26-dl-tutorial/logs
+cp -r ./example_logs/base $SCRATCH/sc26-dl-tutorial/logs
 ```
 
 This scratch directory will serve as our log directory (all results including profiles will be written here). To view results in TensorBoard, open the [`start_tensorboard.ipynb`](start_tensorboard.ipynb) notebook and follow the instructions in it to launch a TensorBoard session in your browser. Once you have TensorBoard open, you should see a dashboard with data for the loss values, learning rate, and average iterations per second. Looking at the validation loss for the `base` config, you should see the following training curve:
@@ -451,7 +451,7 @@ Look at your new logs in Tensorboard. Compare the speed of training across runs,
 as well as the loss and RMSE metrics. You can toggle the horizontol axis to show relative time
 to view timing differences.
 
-You can also use our example saved logs and download them from [our SC25 tensorboard logs](https://portal.nersc.gov/project/dasrepo/sc25_logs/)
+You can also use our example saved logs and download them from [our SC26 tensorboard logs](https://portal.nersc.gov/project/dasrepo/sc26_logs/)
 
 Quick questions:
 
@@ -527,7 +527,7 @@ We have implemented a quick example that loads an MLP and tests this in [tests/m
 Let's try to fix it. First, let's request an interactive node to test the code by doing the following:
 
 ```
-salloc --nodes 1 --qos interactive -t 30 -C gpu -A ntrain5 --reservation=sc25_dl_tutorial_2
+salloc --nodes 1 --qos interactive -t 30 -C gpu -A ntrain5 --reservation=sc26_dl_tutorial_2
 ```
 
 This will place you on a compute node with 4 GPUs. This is your test space where you can try things out using up to 4 GPUs. Try running the test with:
@@ -711,13 +711,13 @@ Now, we are using just context parallelism (so all model parallel GPUs are used 
 *Question: If weights are shared across any model parallel GPUs, what considerations should we keep in mind?*
   
  For shared weights, be careful that the weights are properly initialized and if they need additional reductions, then they are implemented through DDP comm hooks.  
-To keep track of shared weights, we annotate them (see [this example](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/layers.py#L65-L66)) with:
+To keep track of shared weights, we annotate them (see [this example](https://github.com/NERSC/sc26-dl-tutorial/blob/main/distributed/layers.py#L65-L66)) with:
 
 ```
 self.weight.is_shared_mp = ['cp'] 
 self.weight.mark_for_reduction = ['cp'] 
 ```
-Shared weights need to have the same initialization (see [our implementation here](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/helpers.py#L5-L30)). If the input activation grads are sharded, then the weight gradients for the shared weights need an additional AllReduce. Check out the [comm_hooks](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/mappings.py#L224-L279), we have implemented to do an additional AllReduce of the weight gradients across the `cp` group. 
+Shared weights need to have the same initialization (see [our implementation here](https://github.com/NERSC/sc26-dl-tutorial/blob/main/distributed/helpers.py#L5-L30)). If the input activation grads are sharded, then the weight gradients for the shared weights need an additional AllReduce. Check out the [comm_hooks](https://github.com/NERSC/sc26-dl-tutorial/blob/main/distributed/mappings.py#L224-L279), we have implemented to do an additional AllReduce of the weight gradients across the `cp` group.
 
 With CP=4, you will see:
 
