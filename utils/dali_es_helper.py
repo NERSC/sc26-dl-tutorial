@@ -1,16 +1,17 @@
-import os
 import glob
-import numpy as np
+import logging
+from pathlib import Path
+
 import cupyx as cpx
 import h5py
-import logging
+import numpy as np
 
 
-class ERA5ES(object):
-    # very important: the seed has to be constant across the workers, or otherwise mayhem:
+class SynES:
     def __init__(
         self,
-        location,
+        data_path,
+        valid_files,
         train,
         batch_size,
         dt,
@@ -24,71 +25,63 @@ class ERA5ES(object):
         seed=333,
     ):
         self.batch_size = batch_size
-        self.location = location
+        self.data_path = data_path
+        self.valid_files = {f"synthetic_{file_id}.h5" for file_id in valid_files}
         self.img_size = img_size
         self.train = train
-        self.dt = dt
+        self.step = int(dt)
         self.n_in_channels = n_in_channels
         self.n_out_channels = n_out_channels
-        self.rng = np.random.default_rng(seed=seed)
+        self.rng = np.random.default_rng(seed)
         self.num_shards = num_shards
         self.shard_id = shard_id
         self.limit_nsamples = limit_nsamples
 
         self._get_files_stats(enable_logging)
-        self.shuffle = True if train else False
+        self.shuffle = train
 
     def _get_files_stats(self, enable_logging):
-        self.files_paths = glob.glob(self.location + "/*.h5")
-        self.files_paths.sort()
-        self.years = [
-            int(os.path.splitext(os.path.basename(x))[0][-4:]) for x in self.files_paths
-        ]
-        self.n_years = len(self.files_paths)
+        all_files = sorted(glob.glob(f"{self.data_path}/synthetic_*.h5"))
+        if self.train:
+            self.files_paths = [
+                path for path in all_files if Path(path).name not in self.valid_files
+            ]
+        else:
+            self.files_paths = [
+                path for path in all_files if Path(path).name in self.valid_files
+            ]
+        if not self.files_paths:
+            raise FileNotFoundError(
+                f"No {'training' if self.train else 'validation'} files"
+            )
 
-        with h5py.File(self.files_paths[0], "r") as _f:
-            logging.info("Getting file stats from {}".format(self.files_paths[0]))
-            self.n_samples_per_year = _f["fields"].shape[0]
+        with h5py.File(self.files_paths[0], "r") as h5f:
+            shape = h5f["fields"].shape
             self.img_shape_x = self.img_size[0]
             self.img_shape_y = self.img_size[1]
-            assert (
-                self.img_shape_x <= _f["fields"].shape[2]
-                and self.img_shape_y <= _f["fields"].shape[3]
-            ), "image shapes are greater than dataset image shapes"
+        self.samples_per_file = shape[0] - self.step
+        if self.samples_per_file <= 0:
+            raise ValueError("dt must be smaller than the number of steps per file")
+        if self.img_shape_x > shape[2] or self.img_shape_y > shape[3]:
+            raise ValueError("img_size is larger than the stored fields")
 
-        self.n_samples_total = self.n_years * self.n_samples_per_year
+        self.n_samples_total = len(self.files_paths) * self.samples_per_file
         if self.limit_nsamples is not None:
             self.n_samples_total = min(self.n_samples_total, self.limit_nsamples)
-            logging.info(
-                "Overriding total number of samples to: {}".format(self.n_samples_total)
-            )
         self.n_samples_shard = self.n_samples_total // self.num_shards
-        self.files = [None for _ in range(self.n_years)]
-        self.dsets = [None for _ in range(self.n_years)]
+        self.files = [None] * len(self.files_paths)
+        self.dsets = [None] * len(self.files_paths)
         if enable_logging:
             logging.info(
-                "Number of samples per year: {}".format(self.n_samples_per_year)
+                "Using %d files and %d samples for %s",
+                len(self.files_paths),
+                self.n_samples_total,
+                "training" if self.train else "validation",
             )
-            logging.info(
-                "Found data at path {}. Number of examples: {}. Image Shape: {} x {} x {}".format(
-                    self.location,
-                    self.n_samples_total,
-                    self.img_shape_x,
-                    self.img_shape_y,
-                    self.n_in_channels,
-                )
-            )
-            if self.num_shards > 1:
-                logging.info(
-                    "Using shards of size {} per rank".format(self.n_samples_shard)
-                )
 
-        # number of steps per epoch
         self.num_steps_per_epoch = self.n_samples_shard // self.batch_size
         self.last_epoch = None
-
         self.index_permutation = None
-        # prepare buffers for double buffering
         self.current_buffer = 0
         self.inp_buffs = [
             cpx.zeros_pinned(
@@ -120,50 +113,41 @@ class ERA5ES(object):
                 f.close()
 
     def __call__(self, sample_info):
-        # check if epoch is done
         if sample_info.iteration >= self.num_steps_per_epoch:
             raise StopIteration
 
-        # check if we need to shuffle again
         if sample_info.epoch_idx != self.last_epoch:
             self.last_epoch = sample_info.epoch_idx
             if self.shuffle:
                 self.index_permutation = self.rng.permutation(self.n_samples_total)
             else:
                 self.index_permutation = np.arange(self.n_samples_total)
-            # shard the data
             start = self.n_samples_shard * self.shard_id
             end = start + self.n_samples_shard
             self.index_permutation = self.index_permutation[start:end]
 
-        # determine local and sample idx
         sample_idx = self.index_permutation[sample_info.idx_in_epoch]
-        year_idx = int(sample_idx / self.n_samples_per_year)  # which year we are on
-        local_idx = int(
-            sample_idx % self.n_samples_per_year
-        )  # which sample in that year we are on - determines indices for centering
+        file_index, local_idx = divmod(sample_idx, self.samples_per_file)
+        if self.files[file_index] is None:
+            self.files[file_index] = h5py.File(self.files_paths[file_index], "r")
+            self.dsets[file_index] = self.files[file_index]["fields"]
 
-        step = self.dt  # time step
-
-        # boundary conditions to ensure we don't pull data that is not in a specific year
-        local_idx = local_idx % (self.n_samples_per_year - step)
-        if local_idx < step:
-            local_idx += step
-
-        if self.files[year_idx] is None:
-            self.files[year_idx] = h5py.File(self.files_paths[year_idx], "r")
-            self.dsets[year_idx] = self.files[year_idx]["fields"]
-
-        tmp_inp = self.dsets[year_idx][local_idx, ...]
-        tmp_tar = self.dsets[year_idx][local_idx + step, ...]
-
-        # handles to buffers buffers
+        fields = self.dsets[file_index]
         inp = self.inp_buffs[self.current_buffer]
         tar = self.tar_buffs[self.current_buffer]
         self.current_buffer = (self.current_buffer + 1) % 2
 
-        # crop the pixels:
-        inp[...] = tmp_inp[..., : self.img_shape_x, : self.img_shape_y]
-        tar[...] = tmp_tar[..., : self.img_shape_x, : self.img_shape_y]
+        inp[...] = fields[
+            local_idx,
+            : self.n_in_channels,
+            : self.img_shape_x,
+            : self.img_shape_y,
+        ]
+        tar[...] = fields[
+            local_idx + self.step,
+            : self.n_out_channels,
+            : self.img_shape_x,
+            : self.img_shape_y,
+        ]
 
         return inp, tar
