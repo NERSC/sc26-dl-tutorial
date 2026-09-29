@@ -21,8 +21,7 @@ from utils import get_data_loader_distributed
 from utils import comm
 from utils.loss import l2_loss_opt
 from utils.metrics import weighted_rmse
-from networks import vit
-from networks import vit_te
+from networks import vit_mp, vit_te
 
 from distributed.mappings import init_ddp_model_and_reduction_hooks
 from distributed.helpers import init_params_for_shared_weights
@@ -56,7 +55,7 @@ def train(params, writer, local_rank, world_rank):
         model = vit_te.ViT(params).to(device)
     else:  
         logging.info("using native backend")
-        model = vit.ViT(params).to(device)
+        model = vit_mp.ViT(params).to(device)
 
     if params.enable_jit:
         model = torch.compile(model)

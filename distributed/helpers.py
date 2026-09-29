@@ -2,32 +2,54 @@ import torch
 import torch.distributed as dist
 from utils import comm
 
-def init_params_for_shared_weights(model):
-    """Helper routine to ensure shared weights are the same after initialization"""
-    with torch.no_grad():
-        # distributed sync step
-        for param in model.parameters():
-            if not hasattr(param, "is_shared_mp"):
-                # all sharded weights manually annotate this field
-                # if weight doesnt have annotation, then it is a shared weight
-                # layers like patch-embed, decoder head, pos-embed are fully
-                # shared (and not sharded) in this example
-                param.is_shared_mp = ["tp-cp"]  # only TP-CP implemented for now
-                # careful about this stuff..
-                param.mark_for_reduction = []  # not all params need special handling
 
-            for comm_group in param.is_shared_mp:
+def validate_param_comm_metadata(model):
+    """Validate communication metadata for every trainable parameter."""
+    valid_groups = set(comm.get_names())
+    required_keys = {"sharded", "shared", "reduce"}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if not hasattr(param, "comm_metadata"):
+            raise ValueError(f"{name}: missing comm_metadata")
+        metadata = param.comm_metadata
+        if set(metadata) != required_keys:
+            raise ValueError(
+                f"{name}: comm_metadata keys must be {sorted(required_keys)}, "
+                f"got {sorted(metadata)}"
+            )
+        if not all(isinstance(metadata[key], list) for key in required_keys):
+            raise TypeError(f"{name}: all comm_metadata values must be lists")
+        if len(metadata["sharded"]) != param.ndim:
+            raise ValueError(
+                f"{name}: sharded metadata has {len(metadata['sharded'])} entries "
+                f"for a rank-{param.ndim} parameter"
+            )
+        for group_name in metadata["sharded"]:
+            if group_name is not None and group_name not in valid_groups:
+                raise ValueError(f"{name}: unknown sharded group {group_name!r}")
+        for field in ("shared", "reduce"):
+            if any(group_name is None for group_name in metadata[field]):
+                raise ValueError(f"{name}: None is only valid in sharded metadata")
+            unknown = set(metadata[field]) - valid_groups
+            if unknown:
+                raise ValueError(f"{name}: unknown {field} groups {sorted(unknown)}")
+
+
+def init_params_for_shared_weights(model):
+    """Synchronize replicated model-parallel parameters from group roots."""
+    validate_param_comm_metadata(model)
+    with torch.no_grad():
+        for param in model.parameters():
+            if not param.requires_grad:
+                continue
+            for comm_group in param.comm_metadata["shared"]:
                 if comm.get_size(comm_group) > 1:
-                    tlist = [
-                        torch.empty_like(param)
-                        for x in range(comm.get_size(comm_group))
-                    ]
-                    tlist[comm.get_rank(comm_group)] = param
-                    # gather all weights in the comm group
-                    dist.all_gather(tlist, param, group=comm.get_group(comm_group))
-                    # use weight of rank 0
-                    # important to use copy here otherwise the handle gets detaches from the optimizer
-                    param.copy_(tlist[0])
+                    dist.broadcast(
+                        param,
+                        src=comm.get_root(comm_group),
+                        group=comm.get_group(comm_group),
+                    )
 
 
 # distributed primitives
@@ -58,31 +80,34 @@ def _reduce(input_, comm_name):
     if comm.get_size(comm_name) == 1:
         return input_
 
-    # All-reduce.
-    dist.all_reduce(input_.contiguous(), group=comm.get_group(comm_name))
+    output = input_.contiguous().clone()
+    dist.all_reduce(output, group=comm.get_group(comm_name))
+    return output
 
-    return input_
 
-
-def split_tensor_along_dim(tensor, dim, num_chunks):
+def split_tensor_along_dim(tensor, dim, num_chunks, sections=None):
     """Helper routine to split a tensor along a given dimension"""
-    if dim >= tensor.dim():  # scattering from dim that doesnt exist
+    if dim < 0:
+        dim += tensor.dim()
+    if dim < 0 or dim >= tensor.dim():
         raise ValueError(
             f"Error: Scattering along {dim} for a tensor of size {tensor.dim()}"
         )
-    if tensor.shape[dim] < num_chunks:
+    if tensor.shape[dim] < num_chunks and sections is None:
         raise ValueError(
             f"Error, cannot split dim {dim} of size {tensor.shape[dim]} into {num_chunks} chunks"
         )
 
-    # get split
-    sections = compute_split_shapes(tensor.shape[dim], num_chunks)
-    tensor_list = list(torch.split(tensor, sections, dim=dim))
+    if sections is None:
+        sections = compute_split_shapes(tensor.shape[dim], num_chunks)
+    if len(sections) != num_chunks or sum(sections) != tensor.shape[dim]:
+        raise ValueError(
+            f"Invalid sections {sections} for dim {dim} of size {tensor.shape[dim]}"
+        )
+    return list(torch.split(tensor, sections, dim=dim))
 
-    return tensor_list
 
-
-def _split(input_, dim_, comm_name):
+def _split(input_, dim_, comm_name, sections=None):
     """Split the tensor along dim."""
     # Bypass the function if we are using only 1 GPU or if
     # communicator is not initialized
@@ -91,7 +116,7 @@ def _split(input_, dim_, comm_name):
         return input_
 
     # Split along  dimension.
-    input_list = split_tensor_along_dim(input_, dim_, comm_size)
+    input_list = split_tensor_along_dim(input_, dim_, comm_size, sections)
 
     # Note: torch.split does not create contiguous tensors by default.
     comm_rank = comm.get_rank(comm_name)
@@ -107,9 +132,11 @@ def _gather(input_, dim_, shapes_, comm_name):
     comm_size = comm.get_size(comm_name)
     if (shapes_ is not None) and (len(shapes_) != comm_size):
         raise ValueError(f"Error: passed shapes of size not equal to {comm_size}")
-    if dim_ >= input_.dim():  # gathering along dim that doesnt exist
+    if dim_ < 0:
+        dim_ += input_.dim()
+    if dim_ < 0 or dim_ >= input_.dim():
         raise ValueError(
-            f"Error: Gathering along {dim} for a tensor of size {tensor.dim()}"
+            f"Error: Gathering along {dim_} for a tensor of rank {input_.dim()}"
         )
 
     # Bypass the function if we are using only 1 GPU or if
@@ -117,7 +144,6 @@ def _gather(input_, dim_, shapes_, comm_name):
     if comm_size == 1:
         return input_
 
-    comm_rank = comm.get_rank(comm_name)
     input_ = input_.contiguous()
     input_shape = list(input_.shape)
     if shapes_ is not None:
@@ -136,14 +162,16 @@ def _gather(input_, dim_, shapes_, comm_name):
 
     return output
 
-def _reduce_scatter(input_, dim_, comm_name):
+def _reduce_scatter(input_, dim_, shapes_, comm_name):
     """
     Reduces and scatters along dim_
     """
     comm_size = comm.get_size(comm_name)
-    if dim_ >= input_.dim():  # RS along dim that doesnt exist
+    if dim_ < 0:
+        dim_ += input_.dim()
+    if dim_ < 0 or dim_ >= input_.dim():
         raise ValueError(
-            f"Error: Reduce-scatter along {dim} for a tensor of size {tensor.dim()}"
+            f"Error: Reduce-scatter along {dim_} for a tensor of rank {input_.dim()}"
         )
 
     # Bypass the function if we are using only 1 GPU or if
@@ -151,15 +179,26 @@ def _reduce_scatter(input_, dim_, comm_name):
     if comm_size == 1:
         return input_
 
-    comm_rank = comm.get_rank(comm_name)
+    if shapes_ is None:
+        shapes_ = compute_split_shapes(input_.shape[dim_], comm_size)
+    if len(shapes_) != comm_size or sum(shapes_) != input_.shape[dim_]:
+        raise ValueError(
+            f"Invalid reduce-scatter shapes {shapes_} for dim size {input_.shape[dim_]}"
+        )
+
     input_ = input_.contiguous()
-
-    # Split along  dimension. Make sure the individual tensors are contiguous!
     input_list = [
-        t.contiguous() for t in split_tensor_along_dim(input_, dim_, comm_size)
+        t.contiguous()
+        for t in split_tensor_along_dim(input_, dim_, comm_size, shapes_)
     ]
+    comm_rank = comm.get_rank(comm_name)
+    if len(set(shapes_)) == 1:
+        output = torch.empty_like(input_list[comm_rank])
+        dist.reduce_scatter(output, input_list, group=comm.get_group(comm_name))
+        return output
 
-    output = torch.empty_like(input_list[comm_rank].contiguous())
-    dist.reduce_scatter(output, input_list, group=comm.get_group(comm_name))
-
-    return output
+    reduced = input_.clone()
+    dist.all_reduce(reduced, group=comm.get_group(comm_name))
+    return split_tensor_along_dim(
+        reduced, dim_, comm_size, shapes_
+    )[comm_rank].contiguous()

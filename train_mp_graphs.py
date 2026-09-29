@@ -23,7 +23,7 @@ from utils import get_data_loader_distributed
 from utils import comm
 from utils.loss import l2_loss, l2_loss_opt
 from utils.metrics import weighted_rmse
-from networks import vit
+from networks import vit_mp
 
 from distributed.mappings import init_ddp_model_and_reduction_hooks
 from distributed.helpers import init_params_for_shared_weights
@@ -97,7 +97,7 @@ def train(params, args, local_rank, world_rank, world_size):
     logging.info('rank %d, data loader initialized'%(world_rank))
 
     # create model
-    model = vit.ViT(params).to(device)
+    model = vit_mp.ViT(params).to(device)
 
     if params.enable_jit:
         model = torch.compile(model)

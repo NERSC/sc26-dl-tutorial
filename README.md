@@ -516,7 +516,15 @@ params.data_shard_id = comm.get_rank("dp")
 
 ### Setting up the model parallel utilities
 
-Now that we have our groups setup, we just have to tell PyTorch to additionally communicate local results within the groups. All tensor parallel distributed utilities are at [`distributed/`](distributed/). Start off with seeing how the distributed matrix multiply is implemented here [`distributed/layers.py`]. Note that there is a call to `reduce_from_parallel_region()` which does an `all_reduce` of the partial sums. Note that you will need to implement both the forward and backward functions for this new operation that will be used to evaluate and compute the gradient seamlessly. We can do this easily in PyTorch by adding our custom `autograd.Function` class in PyTorch.  This is implemented in [`distributed/mappings.py`](distributed/mappings.py). See the [PyTorch docs](https://pytorch.org/docs/stable/notes/extending.html#how-to-use) for the steps to do this. Check out the `copy_to_parallel_region()` function as well and see the forward and backward operations for them and how they align with what we saw in the slides. Note that we have also implemented other routines (such as gathers and scatters) that are not used for tensor parallel but are used for context parallelism (where we shard the sequence/context dimension across another orthogonal group of GPUs using the `cp` group).
+Now that the groups are set up, PyTorch must communicate local results within
+them. The complete model-parallel ViT, including its column- and row-parallel
+linear layers, is implemented in
+[`networks/vit_mp.py`](networks/vit_mp.py). Row-parallel layers call
+`allreduce_forward_identity_backward()` to sum partial outputs, while
+column-parallel layers use `identity_forward_allreduce_backward()`. Their
+paired custom `autograd.Function` mappings are implemented in
+[`distributed/mappings.py`](distributed/mappings.py). Gather/split and
+gather/reduce-scatter mappings handle context parallelism over the `cp` group.
 
 ### Testing model parallel code (optional)
 
@@ -711,11 +719,15 @@ Now, we are using just context parallelism (so all model parallel GPUs are used 
 *Question: If weights are shared across any model parallel GPUs, what considerations should we keep in mind?*
   
  For shared weights, be careful that the weights are properly initialized and if they need additional reductions, then they are implemented through DDP comm hooks.  
-To keep track of shared weights, we annotate them (see [this example](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/layers.py#L65-L66)) with:
+To keep track of sharded, shared, and additionally reduced parameters, every
+trainable distributed-model parameter has `comm_metadata`, for example:
 
 ```
-self.weight.is_shared_mp = ['cp'] 
-self.weight.mark_for_reduction = ['cp'] 
+self.weight.comm_metadata = {
+    "sharded": ["tp", None],
+    "shared": ["cp"],
+    "reduce": ["cp"],
+}
 ```
 Shared weights need to have the same initialization (see [our implementation here](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/helpers.py#L5-L30)). If the input activation grads are sharded, then the weight gradients for the shared weights need an additional AllReduce. Check out the [comm_hooks](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/mappings.py#L224-L279), we have implemented to do an additional AllReduce of the weight gradients across the `cp` group. 
 
