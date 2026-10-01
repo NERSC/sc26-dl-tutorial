@@ -8,14 +8,15 @@ from utils.rank_generator import RankGenerator
 from utils import comm
 
 from networks.vit import VisionTransformer
+from networks.vit_mp import VisionTransformer as DistributedVisionTransformer
 from parameterized import parameterized
 from distributed.helpers import (
     compute_split_shapes,
     init_params_for_shared_weights,
 )
 from distributed.mappings import (
-    scatter_to_parallel_region,
-    gather_from_parallel_region,
+    split_forward_allgather_backward,
+    allgather_forward_split_backward,
     init_ddp_model_and_reduction_hooks,
 )
 
@@ -120,14 +121,7 @@ class TestDistributed(unittest.TestCase):
         # Handle transformer block gradients
         for name, param in model.named_parameters():
             if "blocks" in name and param.grad is not None:
-                is_shared_tp = hasattr(param, "is_shared_mp") and any(
-                    isinstance(group, str) and ("tp" in group)
-                    for group in param.is_shared_mp
-                )
-
-                if is_shared_tp:
-                    all_grads.append(param.grad.view(-1))
-                else:
+                if "tp" in param.comm_metadata["sharded"]:
                     # sharded params, so gather them
                     grad = param.grad
                     gathered_grads = [torch.zeros_like(grad) for _ in range(tp_size)]
@@ -137,11 +131,13 @@ class TestDistributed(unittest.TestCase):
                     else:
                         grad = torch.cat([g.view(-1) for g in gathered_grads])
                     all_grads.append(grad)
+                else:
+                    all_grads.append(param.grad.view(-1))
 
         # Handle norm gradients (shared in both tp-cp)
-        if model.norm.norm.weight.grad is not None:
-            all_grads.append(model.norm.norm.weight.grad.view(-1))
-            all_grads.append(model.norm.norm.bias.grad.view(-1))
+        if model.norm.weight.grad is not None:
+            all_grads.append(model.norm.weight.grad.view(-1))
+            all_grads.append(model.norm.bias.grad.view(-1))
         # Handle head gradients (shared in both tp-cp)
         if model.head.weight.grad is not None:
             all_grads.append(model.head.weight.grad.view(-1))
@@ -203,13 +199,13 @@ class TestDistributed(unittest.TestCase):
                 self._copy_mlp_weights(block.mlp, block_distributed.mlp)
                 self._copy_attn_weights(block.attn, block_distributed.attn)
                 # copy norm weights
-                block_distributed.norm1.norm.weight.copy_(block.norm1.weight)
-                block_distributed.norm1.norm.bias.copy_(block.norm1.bias)
-                block_distributed.norm2.norm.weight.copy_(block.norm2.weight)
-                block_distributed.norm2.norm.bias.copy_(block.norm2.bias)
+                block_distributed.norm1.weight.copy_(block.norm1.weight)
+                block_distributed.norm1.bias.copy_(block.norm1.bias)
+                block_distributed.norm2.weight.copy_(block.norm2.weight)
+                block_distributed.norm2.bias.copy_(block.norm2.bias)
             # copy head weights
-            model_distributed.norm.norm.weight.copy_(model.norm.weight)
-            model_distributed.norm.norm.bias.copy_(model.norm.bias)
+            model_distributed.norm.weight.copy_(model.norm.weight)
+            model_distributed.norm.bias.copy_(model.norm.bias)
             model_distributed.head.weight.copy_(model.head.weight)
 
     @parameterized.expand(
@@ -263,7 +259,8 @@ class TestDistributed(unittest.TestCase):
         )
         inp.requires_grad = True
         # if you use fp16, don't forget about the gradscalers (not impl in this test)
-        autocast_dtype = torch.bfloat16
+        # autocast_dtype = torch.bfloat16
+        autocast_dtype = torch.float32
         # forward pass
         with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
             out = model(inp)
@@ -281,7 +278,7 @@ class TestDistributed(unittest.TestCase):
             if group is not None:
                 comm._COMM_GROUPS[group_name] = group
 
-        model_distributed = VisionTransformer(
+        model_distributed = DistributedVisionTransformer(
             img_size=[H, W],
             patch_size=patch_size,
             in_chans=chans,
@@ -293,22 +290,24 @@ class TestDistributed(unittest.TestCase):
         ).to(self.device)
         model_distributed.zero_grad(set_to_none=True)
 
-        # wrap in DDP
-        init_params_for_shared_weights(model_distributed)  # mark shared params
+        # sync the weights
+        self._copy_vit_weights(model, model_distributed)
+        init_params_for_shared_weights(model_distributed)
         model_distributed = init_ddp_model_and_reduction_hooks(
             model_distributed,
             device_ids=[self.local_rank],
             output_device=self.device,
         )
 
-        # sync the weights
-        self._copy_vit_weights(model, model_distributed.module)
-
         # forward pass
         with torch.no_grad():
             # dp split that dataloaders take care of usually
-            inp_local = scatter_to_parallel_region(inp, dim=0, comm_name="dp")
-            tar_local = scatter_to_parallel_region(tar, dim=0, comm_name="dp")
+            inp_local = split_forward_allgather_backward(
+                inp, dim=0, shapes=None, comm_name="dp"
+            )
+            tar_local = split_forward_allgather_backward(
+                tar, dim=0, shapes=None, comm_name="dp"
+            )
         inp_local.requires_grad = True
 
         with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
@@ -323,7 +322,7 @@ class TestDistributed(unittest.TestCase):
         ############################################################
         with torch.no_grad():
             # compute error over spatial dimensions
-            out_gather = gather_from_parallel_region(
+            out_gather = allgather_forward_split_backward(
                 out_local, dim=0, shapes=None, comm_name="dp"
             )
             err = torch.mean(
@@ -338,7 +337,7 @@ class TestDistributed(unittest.TestCase):
         # evaluate backward pass
         #############################################################
         with torch.no_grad():
-            inp_grad_gather = gather_from_parallel_region(
+            inp_grad_gather = allgather_forward_split_backward(
                 inp_grad_local, dim=0, shapes=None, comm_name="dp"
             ) / comm.get_size("dp")
             err = torch.mean(

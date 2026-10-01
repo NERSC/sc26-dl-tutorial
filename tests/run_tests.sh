@@ -1,10 +1,10 @@
 #!/bin/bash
 
 image=nersc/pytorch:25.06.01
-dp=1
-tp=1
-cp=1
-nodes=1
+dp=4
+tp=2
+cp=2
+nodes=4
 
 # parse args
 for arg in "$@"

@@ -1,14 +1,11 @@
-import sys
 import os
 import time
 import numpy as np
 import argparse
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
-from torch.amp import autocast, GradScaler
-import torch.multiprocessing
+from torch.amp import autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel
 
@@ -18,13 +15,13 @@ from utils import logging_utils
 logging_utils.config_logger()
 from utils.YParams import YParams
 from utils import get_data_loader_distributed
-from utils.loss import l2_loss, l2_loss_opt
+from utils.loss import l2_loss_opt
 from utils.metrics import weighted_rmse
 from utils.plots import generate_images
 from networks import vit
 
 
-def train(params, args, local_rank, world_rank, world_size):
+def train(params, writer, local_rank, world_rank, world_size):
     # set device and benchmark mode
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)
@@ -32,68 +29,37 @@ def train(params, args, local_rank, world_rank, world_size):
 
     # get data loader
     logging.info("rank %d, begin data loader init" % world_rank)
-    train_data_loader, train_dataset, train_sampler = get_data_loader_distributed(
-        params, params.train_data_path, params.distributed, train=True
+    train_data_loader, _, train_sampler = get_data_loader_distributed(
+        params, params.data_path, params.distributed, train=True
     )
-    val_data_loader, valid_dataset = get_data_loader_distributed(
-        params, params.valid_data_path, params.distributed, train=False
+    val_data_loader, _ = get_data_loader_distributed(
+        params, params.data_path, params.distributed, train=False
     )
     logging.info("rank %d, data loader initialized" % (world_rank))
 
     # create model
     model = vit.ViT(params).to(device)
-
     if params.enable_jit:
         model = torch.compile(model)
 
-    if params.amp_dtype == torch.float16:
-        scaler = GradScaler("cuda")
-    if params.distributed and not args.noddp:
-        if args.disable_broadcast_buffers:
-            model = DistributedDataParallel(
-                model,
-                device_ids=[local_rank],
-                bucket_cap_mb=args.bucket_cap_mb,
-                broadcast_buffers=False,
-                gradient_as_bucket_view=True,
-            )
-        else:
-            model = DistributedDataParallel(
-                model, device_ids=[local_rank], bucket_cap_mb=args.bucket_cap_mb
-            )
+    if params.distributed:
+        model = DistributedDataParallel(model, device_ids=[local_rank])
 
-    if params.enable_fused:
-        optimizer = optim.Adam(
-            model.parameters(), lr=params.lr, fused=True, betas=(0.9, 0.95)
-        )
-    else:
-        optimizer = optim.Adam(model.parameters(), lr=params.lr, betas=(0.9, 0.95))
+    optimizer = optim.Adam(
+        model.parameters(), lr=params.lr, fused=True, betas=(0.9, 0.95)
+    )
 
     if world_rank == 0:
         logging.info(model)
 
-    iters = 0
-    startEpoch = 0
+    warmup_steps = 100
+    lr_scale = lambda step: min(
+        (step + 1) / warmup_steps,
+        0.5 * (1 + np.cos(np.pi * step / params.num_iters)),
+    )
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
 
-    if params.lr_schedule == "cosine":
-        if params.warmup > 0:
-            lr_scale = lambda x: min(
-                (x + 1) / params.warmup,
-                0.5 * (1 + np.cos(np.pi * x / params.num_iters)),
-            )
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
-        else:
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=params.num_iters
-            )
-    else:
-        scheduler = None
-
-    # select loss function
-    if params.enable_jit:
-        loss_func = l2_loss_opt
-    else:
-        loss_func = l2_loss
+    loss_func = l2_loss_opt
 
     if world_rank == 0:
         logging.info("Starting Training Loop...")
@@ -101,35 +67,32 @@ def train(params, args, local_rank, world_rank, world_size):
     # Log initial loss on train and validation to tensorboard
     with torch.no_grad():
         inp, tar = map(lambda x: x.to(device), next(iter(train_data_loader)))
-        gen = model(inp)
-        tr_loss = loss_func(gen, tar)
-        inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
-        gen = model(inp)
-        val_loss = loss_func(gen, tar)
-        val_rmse = weighted_rmse(gen, tar)
+        with autocast("cuda", dtype=torch.bfloat16):
+            gen = model(inp)
+            tr_loss = loss_func(gen, tar)
+            inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
+            gen = model(inp)
+            val_loss = loss_func(gen, tar)
+            val_rmse = weighted_rmse(gen, tar)
         if params.distributed:
             torch.distributed.all_reduce(tr_loss)
             torch.distributed.all_reduce(val_loss)
             torch.distributed.all_reduce(val_rmse)
         if world_rank == 0:
-            args.tboard_writer.add_scalar("Loss/train", tr_loss.item() / world_size, 0)
-            args.tboard_writer.add_scalar("Loss/valid", val_loss.item() / world_size, 0)
-            args.tboard_writer.add_scalar(
-                "RMSE(u10m)/valid", val_rmse.cpu().numpy()[0] / world_size, 0
+            writer.add_scalar("Loss/train", tr_loss.item() / world_size, 0)
+            writer.add_scalar("Loss/valid", val_loss.item() / world_size, 0)
+            writer.add_scalar(
+                "RMSE(field_0)/valid", val_rmse.cpu().numpy()[0] / world_size, 0
             )
 
     params.num_epochs = params.num_iters // len(train_data_loader)
     iters = 0
-    t1 = time.time()
-    for epoch in range(startEpoch, startEpoch + params.num_epochs):
+    for epoch in range(params.num_epochs):
         torch.cuda.synchronize()  # device sync to ensure accurate epoch timings
         if params.distributed and (train_sampler is not None):
             train_sampler.set_epoch(epoch)
         start = time.time()
         tr_loss = []
-        tr_time = 0.0
-        dat_time = 0.0
-        log_time = 0.0
 
         model.train()
         step_count = 0
@@ -142,46 +105,32 @@ def train(params, args, local_rank, world_rank, world_size):
 
             torch.cuda.nvtx.range_push(f"step {i}")
             iters += 1
-            dat_start = time.time()
             torch.cuda.nvtx.range_push(f"data copy in {i}")
 
             inp, tar = map(lambda x: x.to(device), data)
             torch.cuda.nvtx.range_pop()  # copy in
 
-            tr_start = time.time()
-            b_size = inp.size(0)
-
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             torch.cuda.nvtx.range_push(f"forward")
-            with autocast("cuda", enabled=params.amp_enabled, dtype=params.amp_dtype):
+            with autocast("cuda", dtype=torch.bfloat16):
                 gen = model(inp)
                 loss = loss_func(gen, tar)
             torch.cuda.nvtx.range_pop()  # forward
 
-            if params.amp_dtype == torch.float16:
-                scaler.scale(loss).backward()
-                torch.cuda.nvtx.range_push(f"optimizer")
-                scaler.step(optimizer)
-                torch.cuda.nvtx.range_pop()  # optimizer
-                scaler.update()
-            else:
-                loss.backward()
-                torch.cuda.nvtx.range_push(f"optimizer")
-                optimizer.step()
-                torch.cuda.nvtx.range_pop()  # optimizer
+            loss.backward()
+            torch.cuda.nvtx.range_push(f"optimizer")
+            optimizer.step()
+            torch.cuda.nvtx.range_pop()  # optimizer
 
             if params.distributed:
                 torch.distributed.all_reduce(loss)
-            tr_loss.append(loss.item() / world_size)
+            tr_loss.append(loss.detach().item() / world_size)
 
             torch.cuda.nvtx.range_pop()  # step
             # lr step
             scheduler.step()
 
-            tr_end = time.time()
-            tr_time += tr_end - tr_start
-            dat_time += tr_start - dat_start
             step_count += 1
 
         torch.cuda.synchronize()  # device sync to ensure accurate epoch timings
@@ -197,14 +146,14 @@ def train(params, args, local_rank, world_rank, world_size):
                 samples_per_sec,
             )
             logging.info("  Avg train loss=%f" % np.mean(tr_loss))
-            args.tboard_writer.add_scalar("Loss/train", np.mean(tr_loss), iters)
-            args.tboard_writer.add_scalar(
+            writer.add_scalar("Loss/train", np.mean(tr_loss), iters)
+            writer.add_scalar(
                 "Learning Rate", optimizer.param_groups[0]["lr"], iters
             )
-            args.tboard_writer.add_scalar("Avg iters per sec", iters_per_sec, iters)
-            args.tboard_writer.add_scalar("Avg samples per sec", samples_per_sec, iters)
+            writer.add_scalar("Avg iters per sec", iters_per_sec, iters)
+            writer.add_scalar("Avg samples per sec", samples_per_sec, iters)
             fig = generate_images([inp, tar, gen])
-            args.tboard_writer.add_figure("Visualization, t2m", fig, iters, close=True)
+            writer.add_figure("Visualization, field_2", fig, iters, close=True)
 
         val_start = time.time()
         val_loss = torch.zeros(1, device=device)
@@ -217,9 +166,7 @@ def train(params, args, local_rank, world_rank, world_size):
         with torch.inference_mode():
             with torch.no_grad():
                 for i, data in enumerate(val_data_loader, 0):
-                    with autocast(
-                        "cuda", enabled=params.amp_enabled, dtype=params.amp_dtype
-                    ):
+                    with autocast("cuda", dtype=torch.bfloat16):
                         inp, tar = map(lambda x: x.to(device), data)
                         gen = model(inp)
                         val_loss += loss_func(gen, tar)
@@ -238,15 +185,11 @@ def train(params, args, local_rank, world_rank, world_size):
         if world_rank == 0:
             logging.info("  Avg val loss={}".format(val_loss.item()))
             logging.info("  Total validation time: {} sec".format(val_end - val_start))
-            args.tboard_writer.add_scalar("Loss/valid", val_loss, iters)
-            args.tboard_writer.add_scalar(
-                "RMSE(u10m)/valid", val_rmse.cpu().numpy()[0], iters
+            writer.add_scalar("Loss/valid", val_loss, iters)
+            writer.add_scalar(
+                "RMSE(field_0)/valid", val_rmse.cpu().numpy()[0], iters
             )
-            args.tboard_writer.flush()
-
-    t2 = time.time()
-    tottime = t2 - t1
-
+            writer.flush()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -265,87 +208,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", default="base", type=str, help="name of desired config in yaml file"
     )
-    parser.add_argument(
-        "--amp_mode",
-        default="none",
-        type=str,
-        choices=["none", "fp16", "bf16"],
-        help="select automatic mixed precision mode",
-    )
-    parser.add_argument(
-        "--enable_fused", action="store_true", help="enable fused Adam optimizer"
-    )
-    parser.add_argument(
-        "--enable_jit", action="store_true", help="enable JIT compilation"
-    )
-    parser.add_argument(
-        "--local_batch_size",
-        default=None,
-        type=int,
-        help="local batchsize (manually override global_batch_size config setting)",
-    )
-    parser.add_argument(
-        "--num_iters", default=None, type=int, help="number of iters to run"
-    )
-    parser.add_argument(
-        "--num_data_workers",
-        default=None,
-        type=int,
-        help="number of data workers for data loader",
-    )
-    parser.add_argument(
-        "--data_loader_config",
-        default=None,
-        type=str,
-        choices=["pytorch", "dali"],
-        help="dataloader configuration. choices: 'pytorch', 'dali'",
-    )
-    parser.add_argument(
-        "--bucket_cap_mb", default=25, type=int, help="max message bucket size in mb"
-    )
-    parser.add_argument(
-        "--disable_broadcast_buffers",
-        action="store_true",
-        help="disable syncing broadcasting buffers",
-    )
-    parser.add_argument(
-        "--noddp", action="store_true", help="disable DDP communication"
-    )
     args = parser.parse_args()
 
     run_num = args.run_num
 
     params = YParams(os.path.abspath(args.yaml_config), args.config)
-
-    # Update config with modified args
-    # set up amp
-    if args.amp_mode != "none":
-        params.update({"amp_mode": args.amp_mode})
-    amp_dtype = torch.float32
-
-    if params.amp_mode == "fp16":
-        amp_dtype = torch.float16
-    elif params.amp_mode == "bf16":
-        amp_dtype = torch.bfloat16
-
-    params.update(
-        {"amp_enabled": amp_dtype is not torch.float32, "amp_dtype": amp_dtype}
-    )
-
-    if args.enable_fused:
-        params.update({"enable_fused": args.enable_fused})
-
-    if args.enable_jit:
-        params.update({"enable_jit": args.enable_jit})
-
-    if args.data_loader_config:
-        params.update({"data_loader_config": args.data_loader_config})
-
-    if args.num_iters:
-        params.update({"num_iters": args.num_iters})
-
-    if args.num_data_workers:
-        params.update({"num_data_workers": args.num_data_workers})
 
     params.distributed = False
     if "WORLD_SIZE" in os.environ:
@@ -361,13 +228,11 @@ if __name__ == "__main__":
         world_rank = torch.distributed.get_rank()
         local_rank = int(os.environ["LOCAL_RANK"])
 
-    if args.local_batch_size:
-        # Manually override batch size
-        params.local_batch_size = args.local_batch_size
-        params.update({"global_batch_size": world_size * args.local_batch_size})
-    else:
-        # Compute local batch size based on number of ranks
-        params.local_batch_size = params.global_batch_size // world_size
+    assert params.global_batch_size % world_size == 0, (
+        f"global_batch_size ({params.global_batch_size}) must be divisible by "
+        f"world_size ({world_size})"
+    )
+    params.local_batch_size = params.global_batch_size // world_size
 
     # for dali data loader, set the actual number of data shards and id
     params.data_num_shards = world_size
@@ -378,6 +243,7 @@ if __name__ == "__main__":
     expDir = os.path.join(
         baseDir, args.config + "/%dGPU/" % (world_size) + str(run_num) + "/"
     )
+    writer = None
     if world_rank == 0:
         if not os.path.isdir(expDir):
             os.makedirs(expDir)
@@ -385,11 +251,11 @@ if __name__ == "__main__":
             logger_name=None, log_filename=os.path.join(expDir, "out.log")
         )
         params.log()
-        args.tboard_writer = SummaryWriter(log_dir=os.path.join(expDir, "logs/"))
+        writer = SummaryWriter(log_dir=os.path.join(expDir, "logs/"))
 
     params.experiment_dir = os.path.abspath(expDir)
 
-    train(params, args, local_rank, world_rank, world_size)
+    train(params, writer, local_rank, world_rank, world_size)
 
     if params.distributed:
         torch.distributed.barrier()

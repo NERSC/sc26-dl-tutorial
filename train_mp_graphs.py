@@ -23,7 +23,7 @@ from utils import get_data_loader_distributed
 from utils import comm
 from utils.loss import l2_loss, l2_loss_opt
 from utils.metrics import weighted_rmse
-from networks import vit
+from networks import vit_mp
 
 from distributed.mappings import init_ddp_model_and_reduction_hooks
 from distributed.helpers import init_params_for_shared_weights
@@ -92,12 +92,12 @@ def train(params, args, local_rank, world_rank, world_size):
 
     # get data loader
     logging.info('rank %d, begin data loader init'%world_rank)
-    train_data_loader, train_dataset, train_sampler = get_data_loader_distributed(params, params.train_data_path, params.distributed, train=True)
-    val_data_loader, valid_dataset = get_data_loader_distributed(params, params.valid_data_path, params.distributed, train=False)
+    train_data_loader, train_dataset, train_sampler = get_data_loader_distributed(params, params.data_path, params.distributed, train=True)
+    val_data_loader, valid_dataset = get_data_loader_distributed(params, params.data_path, params.distributed, train=False)
     logging.info('rank %d, data loader initialized'%(world_rank))
 
     # create model
-    model = vit.ViT(params).to(device)
+    model = vit_mp.ViT(params).to(device)
 
     if params.enable_jit:
         model = torch.compile(model)
@@ -171,7 +171,7 @@ def train(params, args, local_rank, world_rank, world_size):
         if world_rank==0:
             args.tboard_writer.add_scalar('Loss/train', tr_loss.item(), 0)
             args.tboard_writer.add_scalar('Loss/valid', val_loss.item(), 0)
-            args.tboard_writer.add_scalar('RMSE(u10m)/valid', val_rmse.cpu().numpy()[0], 0)
+            args.tboard_writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], 0)
 
     params.num_epochs = params.num_iters//len(train_data_loader)
     iters = 0
@@ -228,7 +228,7 @@ def train(params, args, local_rank, world_rank, world_size):
 
             if params.distributed:
                 torch.distributed.all_reduce(static_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
-            tr_loss.append(static_loss.item())
+            tr_loss.append(static_loss.detach().item())
 
             torch.cuda.nvtx.range_pop() # step
             # lr step
@@ -253,7 +253,7 @@ def train(params, args, local_rank, world_rank, world_size):
             args.tboard_writer.add_scalar('Avg iters per sec', iters_per_sec, iters)
             args.tboard_writer.add_scalar('Avg samples per sec', samples_per_sec, iters)
             fig = generate_images([inp, tar, gen])
-            args.tboard_writer.add_figure('Visualization, t2m', fig, iters, close=True)
+            args.tboard_writer.add_figure('Visualization, field_2', fig, iters, close=True)
 
         val_start = time.time()
         val_loss = torch.zeros(1, device=device)
@@ -282,7 +282,7 @@ def train(params, args, local_rank, world_rank, world_size):
             logging.info('  Avg val loss={}'.format(val_loss.item()))
             logging.info('  Total validation time: {} sec'.format(val_end - val_start)) 
             args.tboard_writer.add_scalar('Loss/valid', val_loss, iters)
-            args.tboard_writer.add_scalar('RMSE(u10m)/valid', val_rmse.cpu().numpy()[0], iters)
+            args.tboard_writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], iters)
             args.tboard_writer.flush()
 
     torch.cuda.synchronize()

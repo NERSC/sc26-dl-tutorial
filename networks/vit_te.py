@@ -7,7 +7,10 @@ from networks.helpers import DropPath, trunc_normal_
 # mp stuff
 from utils import comm
 from distributed.helpers import compute_split_shapes
-from distributed.mappings import scatter_to_parallel_region, gather_from_parallel_region
+from distributed.mappings import (
+    allgather_forward_split_backward,
+    split_forward_allgather_backward,
+)
 
 import transformer_engine.pytorch as te
 
@@ -54,17 +57,26 @@ class MLP(nn.Module):
         )
         self.drop = nn.Dropout(drop)
 
-        # mark weights
-        self.fc1.weight.is_shared_mp = ["cp"]
-        self.fc1.weight.mark_for_reduction = ["cp"]
-        self.fc1.bias.is_shared_mp = ["cp"]
-        self.fc1.bias.mark_for_reduction = ["cp"]
-        self.fc2.weight.is_shared_mp = ["cp"]
-        self.fc2.weight.mark_for_reduction = ["cp"]
-        self.fc2.bias.is_shared_mp = [
-            "tp-cp"
-        ]  # careful : output has joined, so shared across tp-cp
-        self.fc2.bias.mark_for_reduction = ["cp"]
+        self.fc1.weight.comm_metadata = {
+            "sharded": ["tp", None],
+            "shared": ["cp"],
+            "reduce": ["cp"],
+        }
+        self.fc1.bias.comm_metadata = {
+            "sharded": ["tp"],
+            "shared": ["cp"],
+            "reduce": ["cp"],
+        }
+        self.fc2.weight.comm_metadata = {
+            "sharded": [None, "tp"],
+            "shared": ["cp"],
+            "reduce": ["cp"],
+        }
+        self.fc2.bias.comm_metadata = {
+            "sharded": [None],
+            "shared": ["tp-cp"],
+            "reduce": ["cp"],
+        }
 
     def forward(self, x):
         x = self.fc1(x)
@@ -162,25 +174,28 @@ class Attention(nn.Module):
         )
         self.proj_drop = nn.Dropout(proj_drop)
 
-        # mark weights
-        self.q.weight.is_shared_mp = ["cp"]
-        self.q.weight.mark_for_reduction = ["cp"]
-        self.q.bias.is_shared_mp = ["cp"]
-        self.q.bias.mark_for_reduction = ["cp"]
-        self.k.weight.is_shared_mp = ["cp"]
-        self.k.weight.mark_for_reduction = ["cp"]
-        self.k.bias.is_shared_mp = ["cp"]
-        self.k.bias.mark_for_reduction = ["cp"]
-        self.v.weight.is_shared_mp = ["cp"]
-        self.v.weight.mark_for_reduction = ["cp"]
-        self.v.bias.is_shared_mp = ["cp"]
-        self.v.bias.mark_for_reduction = ["cp"]
-        self.proj.weight.is_shared_mp = ["cp"]
-        self.proj.weight.mark_for_reduction = ["cp"]
-        self.proj.bias.is_shared_mp = [
-            "tp-cp"
-        ]  # careful : output has joined, so shared across tp-cp
-        self.proj.bias.mark_for_reduction = ["cp"]
+        for projection in (self.q, self.k, self.v):
+            projection.weight.comm_metadata = {
+                "sharded": ["tp", None],
+                "shared": ["cp"],
+                "reduce": ["cp"],
+            }
+            if projection.bias is not None:
+                projection.bias.comm_metadata = {
+                    "sharded": ["tp"],
+                    "shared": ["cp"],
+                    "reduce": ["cp"],
+                }
+        self.proj.weight.comm_metadata = {
+            "sharded": [None, "tp"],
+            "shared": ["cp"],
+            "reduce": ["cp"],
+        }
+        self.proj.bias.comm_metadata = {
+            "sharded": [None],
+            "shared": ["tp-cp"],
+            "reduce": ["cp"],
+        }
 
     def _pad(self, x):
         B, N, C = x.shape
@@ -235,14 +250,18 @@ class LayerNorm(nn.Module):
                 bias=True
         )
 
-        if elementwise_affine and (comm.get_size("tp-cp") > 1):
-            # affine weights need additional allreduce and are shared
-            # across all groups
-            self.norm.weight.is_shared_mp = [comm_tp_name, comm_cp_name]
-            self.norm.weight.mark_for_reduction = [comm_cp_name]
+        if elementwise_affine:
+            self.norm.weight.comm_metadata = {
+                "sharded": [None],
+                "shared": ["tp-cp"],
+                "reduce": [comm_cp_name],
+            }
             if self.norm.bias is not None:
-                self.norm.bias.is_shared_mp = [comm_tp_name, comm_cp_name]
-                self.norm.bias.mark_for_reduction = [comm_cp_name]
+                self.norm.bias.comm_metadata = {
+                    "sharded": [None],
+                    "shared": ["tp-cp"],
+                    "reduce": [comm_cp_name],
+                }
 
     def forward(self, x):
         return self.norm(x.contiguous())
@@ -344,12 +363,27 @@ class VisionTransformer(nn.Module):
             in_chans=in_chans,
             embed_dim=self.embed_dim,
         )
+        self.patch_embed.proj.weight.comm_metadata = {
+            "sharded": [None, None, None, None],
+            "shared": ["tp-cp"],
+            "reduce": [],
+        }
+        self.patch_embed.proj.bias.comm_metadata = {
+            "sharded": [None],
+            "shared": ["tp-cp"],
+            "reduce": [],
+        }
         num_patches = self.patch_embed.num_patches
 
         # if context parallel, split the sequence/context
         self.cp_shapes = compute_split_shapes(num_patches, comm.get_size("cp"))
 
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, self.embed_dim))
+        self.pos_embed.comm_metadata = {
+            "sharded": [None, None, None],
+            "shared": ["tp-cp"],
+            "reduce": [],
+        }
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [
@@ -377,6 +411,11 @@ class VisionTransformer(nn.Module):
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 
         self.head = nn.Linear(embed_dim, self.out_size, bias=False)
+        self.head.weight.comm_metadata = {
+            "sharded": [None, None],
+            "shared": ["tp-cp"],
+            "reduce": [],
+        }
 
         trunc_normal_(self.pos_embed, std=0.02)
         self.apply(self._init_weights)
@@ -423,7 +462,9 @@ class VisionTransformer(nn.Module):
         x = self.prepare_tokens(x)
 
         # split sequence if cp is on (shape of x is (batch, seq, embed))
-        x = scatter_to_parallel_region(x, dim=1, comm_name="cp")
+        x = split_forward_allgather_backward(
+            x, dim=1, shapes=self.cp_shapes, comm_name="cp"
+        )
 
         # if cp is on, each block operates on a sequence shard
         for blk in self.blocks:
@@ -432,7 +473,9 @@ class VisionTransformer(nn.Module):
         x = self.norm(x)
 
         # gather sequence if cp is on
-        x = gather_from_parallel_region(x, dim=1, shapes=self.cp_shapes, comm_name="cp")
+        x = allgather_forward_split_backward(
+            x, dim=1, shapes=self.cp_shapes, comm_name="cp"
+        )
 
         x = self.forward_head(x)
         return x

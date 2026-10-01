@@ -1,28 +1,16 @@
-import logging
-import torch
+import h5py
 import numpy as np
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
-from torch import Tensor
-
-# concurrent futures
-import concurrent.futures as cf
-
-# distributed stuff
+import torch
 import torch.distributed as dist
-from utils import comm
-
-# dali stuff
-from nvidia.dali.pipeline import Pipeline
 import nvidia.dali.fn as fn
-import nvidia.dali.types as types
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
+from nvidia.dali.pipeline import Pipeline
 
-# es helper
 import utils.dali_es_helper as esh
 
 
-def get_data_loader(params, files_pattern, distributed, train):
-    dataloader = DaliDataLoader(params, files_pattern, train)
+def get_data_loader(params, data_path, distributed, train):
+    dataloader = SynDaliDataLoader(params, data_path, train)
 
     if train:
         return dataloader, None, None
@@ -30,7 +18,7 @@ def get_data_loader(params, files_pattern, distributed, train):
         return dataloader, None
 
 
-class DaliDataLoader(object):
+class SynDaliDataLoader:
     def get_pipeline(self):
         pipeline = Pipeline(
             batch_size=self.batch_size,
@@ -42,10 +30,10 @@ class DaliDataLoader(object):
         )
 
         with pipeline:  # get input and target
-            # get input and target
             inp, tar = fn.external_source(
-                source=esh.ERA5ES(
-                    self.location,
+                source=esh.SynES(
+                    self.data_path,
+                    self.valid_files,
                     self.train,
                     self.batch_size,
                     self.dt,
@@ -61,11 +49,10 @@ class DaliDataLoader(object):
                 num_outputs=2,
                 layout=["CHW", "CHW"],
                 batch=False,
-                no_copy=True,
                 parallel=True,
+                prefetch_queue_depth=self.num_data_workers,
             )
 
-            # upload to GPU
             inp = inp.gpu()
             tar = tar.gpu()
 
@@ -91,21 +78,14 @@ class DaliDataLoader(object):
             pipeline.set_outputs(inp, tar)
         return pipeline
 
-    def __init__(self, params, location, train, seed=333):
-        # set up seeds
-        # this one is the same on all ranks
+    def __init__(self, params, data_path, train, seed=333):
         self.global_seed = seed
-        # this one is the same for all ranks of the same model
-        model_id = comm.get_world_rank() // comm.get_size("tp-cp-pp")
-        self.model_seed = self.global_seed + model_id
-        # this seed is supposed to be diffferent for every rank
-        self.local_seed = self.global_seed + comm.get_world_rank()
-
         self.num_data_workers = params.num_data_workers
         self.device_index = torch.cuda.current_device()
         self.batch_size = int(params.local_batch_size)
 
-        self.location = location
+        self.data_path = data_path
+        self.valid_files = params.valid_files
         self.train = train
         self.dt = params.dt
         self.n_in_channels = params.n_in_channels
@@ -115,18 +95,15 @@ class DaliDataLoader(object):
             params.limit_nsamples if train else params.limit_nsamples_val
         )
 
-        # load stats
+        with h5py.File(params.stats_path, "r") as stats:
+            means = stats["mean"][:].astype(np.float32)[:, None, None]
+            stds = stats["std"][:].astype(np.float32)[:, None, None]
         self.normalize = True
-        means = np.load(params.global_means_path)[0][: self.n_in_channels]
-        stds = np.load(params.global_stds_path)[0][: self.n_in_channels]
-        self.in_bias = means
-        self.in_scale = stds
-        means = np.load(params.global_means_path)[0][: self.n_out_channels]
-        stds = np.load(params.global_stds_path)[0][: self.n_out_channels]
-        self.out_bias = means
-        self.out_scale = stds
+        self.in_bias = means[: self.n_in_channels]
+        self.in_scale = stds[: self.n_in_channels]
+        self.out_bias = means[: self.n_out_channels]
+        self.out_scale = stds[: self.n_out_channels]
 
-        # set sharding
         if dist.is_initialized():
             self.num_shards = params.data_num_shards
             self.shard_id = params.data_shard_id
@@ -134,9 +111,9 @@ class DaliDataLoader(object):
             self.num_shards = 1
             self.shard_id = 0
 
-        # get img source data
-        extsource = esh.ERA5ES(
-            self.location,
+        extsource = esh.SynES(
+            self.data_path,
+            self.valid_files,
             self.train,
             self.batch_size,
             self.dt,
@@ -151,12 +128,10 @@ class DaliDataLoader(object):
         self.num_batches = extsource.num_steps_per_epoch
         del extsource
 
-        # create pipeline
         self.pipeline = self.get_pipeline()
         self.pipeline.start_py_workers()
         self.pipeline.build()
 
-        # create iterator
         self.iterator = DALIGenericIterator(
             [self.pipeline],
             ["inp", "tar"],
@@ -169,7 +144,6 @@ class DaliDataLoader(object):
         return self.num_batches
 
     def __iter__(self):
-        # self.iterator.reset()
         for token in self.iterator:
             inp = token[0]["inp"]
             tar = token[0]["tar"]

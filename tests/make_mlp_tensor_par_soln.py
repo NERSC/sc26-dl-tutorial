@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import argparse
 from distributed.mappings import (
-    copy_to_parallel_region, 
-    reduce_from_parallel_region,
+    identity_forward_allreduce_backward,
+    allreduce_forward_identity_backward,
 )
 from utils import comm
 from tests.helpers import copy_mlp_weights
@@ -62,13 +62,13 @@ class DistributedMLP(nn.Module):
         self.fc2 = nn.Linear(hidden_features_local, out_features, bias=False)
 
     def forward(self, x):
-        x = copy_to_parallel_region(x, "tp")
+        x = identity_forward_allreduce_backward(x, "tp")
         x = self.fc1(x)
         if comm.get_world_rank == 0:
             print(f"after fc1: output shape {x.shape}")
         x = self.act(x)
         x = self.fc2(x)
-        x = reduce_from_parallel_region(x, "tp")
+        x = allreduce_forward_identity_backward(x, "tp")
         if comm.get_world_rank == 0:
             print(f"after fc2: output shape {x.shape}")
         return x

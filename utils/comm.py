@@ -47,6 +47,13 @@ def get_rank(comm_name):
         return dist.get_rank(group=get_group(comm_name))
 
 
+def get_root(comm_name):
+    """Return the global rank of rank zero in a communicator."""
+    if (not dist.is_initialized()) or (not is_initialized(comm_name)):
+        return 0
+    return dist.get_process_group_ranks(get_group(comm_name))[0]
+
+
 # routines for world comms
 def get_world_size():
     """Returns the world size"""
