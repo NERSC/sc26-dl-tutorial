@@ -49,8 +49,8 @@ class SynDaliDataLoader:
                 num_outputs=2,
                 layout=["CHW", "CHW"],
                 batch=False,
-                no_copy=True,
                 parallel=True,
+                prefetch_queue_depth=self.num_data_workers,
             )
 
             inp = inp.gpu()

@@ -2,7 +2,6 @@ import glob
 import logging
 from pathlib import Path
 
-import cupyx as cpx
 import h5py
 import numpy as np
 
@@ -82,27 +81,8 @@ class SynES:
         self.num_steps_per_epoch = self.n_samples_shard // self.batch_size
         self.last_epoch = None
         self.index_permutation = None
-        self.current_buffer = 0
-        self.inp_buffs = [
-            cpx.zeros_pinned(
-                (self.n_in_channels, self.img_shape_x, self.img_shape_y),
-                dtype=np.float32,
-            ),
-            cpx.zeros_pinned(
-                (self.n_in_channels, self.img_shape_x, self.img_shape_y),
-                dtype=np.float32,
-            ),
-        ]
-        self.tar_buffs = [
-            cpx.zeros_pinned(
-                (self.n_out_channels, self.img_shape_x, self.img_shape_y),
-                dtype=np.float32,
-            ),
-            cpx.zeros_pinned(
-                (self.n_out_channels, self.img_shape_x, self.img_shape_y),
-                dtype=np.float32,
-            ),
-        ]
+        self.inp_buf = None
+        self.tar_buf = None
 
     def __len__(self):
         return self.n_samples_shard
@@ -132,22 +112,30 @@ class SynES:
             self.files[file_index] = h5py.File(self.files_paths[file_index], "r")
             self.dsets[file_index] = self.files[file_index]["fields"]
 
-        fields = self.dsets[file_index]
-        inp = self.inp_buffs[self.current_buffer]
-        tar = self.tar_buffs[self.current_buffer]
-        self.current_buffer = (self.current_buffer + 1) % 2
+        if self.inp_buf is None:
+            self.inp_buf = np.empty(
+                (self.n_in_channels, self.img_shape_x, self.img_shape_y),
+                dtype=np.float32,
+            )
+            self.tar_buf = np.empty(
+                (self.n_out_channels, self.img_shape_x, self.img_shape_y),
+                dtype=np.float32,
+            )
 
-        inp[...] = fields[
+        fields = self.dsets[file_index]
+        self.inp_buf[...] = fields[
             local_idx,
             : self.n_in_channels,
             : self.img_shape_x,
             : self.img_shape_y,
         ]
-        tar[...] = fields[
+        self.tar_buf[...] = fields[
             local_idx + self.step,
             : self.n_out_channels,
             : self.img_shape_x,
             : self.img_shape_y,
         ]
 
-        return inp, tar
+        # DALI consumes samples asynchronously, so each result needs independent
+        # storage that will not be overwritten by the next call.
+        return self.inp_buf.copy(), self.tar_buf.copy()
