@@ -30,18 +30,19 @@ class TestDistributed(unittest.TestCase):
 
         # get model parallel sizes
         tp = int(os.getenv("TP", 1))
-        cp = int(os.getenv("CP", 1))
-        pp = 1
-        order = "cp-tp-dp-pp"
-        model_parallel_size = tp * cp * pp
+        sp1 = int(os.getenv("SP1", 1))
+        sp2 = int(os.getenv("SP2", 1))
+        order = "sp1-sp2-tp-dp"
+        model_parallel_size = tp * sp1 * sp2
+        assert cls.world_size % model_parallel_size == 0
         dp = cls.world_size // model_parallel_size
         assert dp >= 1, "ERROR: data parallel wireup failed since dp = {}".format(dp)
 
         cls.print_to_screen = cls.world_rank == 0
         if cls.print_to_screen:
             print(
-                "Distributed unit tests with DP = {}, TP = {}, CP = {}, PP = {}".format(
-                    dp, tp, cp, pp
+                "Distributed unit tests with DP = {}, TP = {}, SP1 = {}, SP2 = {}".format(
+                    dp, tp, sp1, sp2
                 )
             )
 
@@ -81,7 +82,9 @@ class TestDistributed(unittest.TestCase):
             assert False, "Running distributed tests on single GPU"
 
         # init model + dp groups individually
-        comm.init_model_parallel_info(tp=tp, cp=cp, dp=dp, pp=pp, order=order)
+        comm.init_model_parallel_info(
+            dp=dp, tp=tp, sp1=sp1, sp2=sp2, order=order
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -98,9 +101,6 @@ class TestDistributed(unittest.TestCase):
     def _get_reconstructed_grads(self, model):
         """Get reconstructed gradients from a distributed model, handling shared parameters"""
         tp_size = comm.get_size("tp")
-        cp_size = comm.get_size("cp")
-        tp_rank = comm.get_rank("tp")
-        tp_cp_size = comm.get_size("tp-cp")
 
         all_grads = []
         col_sharded_layers = ["fc2", "attn.proj"]  # need to gather differently
@@ -108,7 +108,7 @@ class TestDistributed(unittest.TestCase):
         if model.pos_embed.grad is not None:
             all_grads.append(model.pos_embed.grad.view(-1))
 
-        # Handle patch embed gradients (shared in both tp and cp)
+        # Handle patch embed gradients (shared in both tp and sp1)
         if model.patch_embed.proj.weight.grad is not None:
             all_grads.append(model.patch_embed.proj.weight.grad.view(-1))
         if (
@@ -133,11 +133,11 @@ class TestDistributed(unittest.TestCase):
                 else:
                     all_grads.append(param.grad.view(-1))
 
-        # Handle norm gradients (shared in both tp-cp)
+        # Handle norm gradients (shared across tp-sp1-sp2)
         if model.norm.norm.weight.grad is not None:
             all_grads.append(model.norm.norm.weight.grad.view(-1))
             all_grads.append(model.norm.norm.bias.grad.view(-1))
-        # Handle head gradients (shared in both tp-cp)
+        # Handle head gradients (shared across tp-sp1-sp2)
         if model.head.weight.grad is not None:
             all_grads.append(model.head.weight.grad.view(-1))
 
@@ -228,7 +228,7 @@ class TestDistributed(unittest.TestCase):
         #############################################################
         # non-distributed op
         #############################################################
-        # temporarily remove tp and tp-sp groups for non-distributed version
+        # Temporarily remove parallel groups for the non-distributed version.
         old_groups = {}
         comm_groups = list(comm._COMM_GROUPS.keys())
         for old_group in comm_groups:

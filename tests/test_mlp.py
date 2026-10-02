@@ -30,18 +30,19 @@ class TestDistributed(unittest.TestCase):
 
         # get model parallel sizes
         tp = int(os.getenv("TP", 1))
-        cp = int(os.getenv("CP", 1))
-        pp = 1
-        order = "cp-tp-dp-pp"
-        model_parallel_size = tp * cp * pp
+        sp1 = int(os.getenv("SP1", 1))
+        sp2 = int(os.getenv("SP2", 1))
+        order = "tp-sp1-sp2-dp"
+        model_parallel_size = tp * sp1 * sp2
+        assert cls.world_size % model_parallel_size == 0
         dp = cls.world_size // model_parallel_size
         assert dp >= 1, "ERROR: data parallel wireup failed since dp = {}".format(dp)
 
         cls.print_to_screen = cls.world_rank == 0
         if cls.print_to_screen:
             print(
-                "Distributed unit tests with DP = {}, TP = {}, CP = {}, PP = {}".format(
-                    dp, tp, cp, pp
+                "Distributed unit tests with DP = {}, TP = {}, SP1 = {}, SP2 = {}".format(
+                    dp, tp, sp1, sp2
                 )
             )
 
@@ -81,7 +82,9 @@ class TestDistributed(unittest.TestCase):
             assert False, "Running distributed tests on single GPU"
 
         # init model + dp groups individually
-        comm.init_model_parallel_info(tp=tp, cp=cp, dp=dp, pp=pp, order=order)
+        comm.init_model_parallel_info(
+            dp=dp, tp=tp, sp1=sp1, sp2=sp2, order=order
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -98,9 +101,6 @@ class TestDistributed(unittest.TestCase):
     def _get_reconstructed_grads(self, model):
         """Get reconstructed gradients from a distributed model, handling shared parameters"""
         tp_size = comm.get_size("tp")
-        cp_size = comm.get_size("cp")
-        tp_rank = comm.get_rank("tp")
-        tp_cp_size = comm.get_size("tp-cp")
 
         all_grads = []
         col_sharded_layers = ["fc2"]  # need to gather differently
@@ -226,13 +226,13 @@ class TestDistributed(unittest.TestCase):
                 inp, dim=0, shapes=None, comm_name="dp"
             )
             inp_local = split_forward_allgather_backward(
-                inp_local, dim=1, shapes=None, comm_name="cp"
+                inp_local, dim=1, shapes=None, comm_name="sp1-sp2"
             )
             tar_local = split_forward_allgather_backward(
                 tar, dim=0, shapes=None, comm_name="dp"
             )
             tar_local = split_forward_allgather_backward(
-                tar_local, dim=1, shapes=None, comm_name="cp"
+                tar_local, dim=1, shapes=None, comm_name="sp1-sp2"
             )
         inp_local.requires_grad = True
 
@@ -252,7 +252,7 @@ class TestDistributed(unittest.TestCase):
                 out_local, dim=0, shapes=None, comm_name="dp"
             )
             out_gather = allgather_forward_split_backward(
-                out_gather, dim=1, shapes=None, comm_name="cp"
+                out_gather, dim=1, shapes=None, comm_name="sp1-sp2"
             )
             err = torch.mean(
                 torch.norm(out - out_gather, p=2, dim=(1, 2))
@@ -270,8 +270,8 @@ class TestDistributed(unittest.TestCase):
                 inp_grad_local, dim=0, shapes=None, comm_name="dp"
             ) / comm.get_size("dp")
             inp_grad_gather = allgather_forward_split_backward(
-                inp_grad_gather, dim=1, shapes=None, comm_name="cp"
-            ) / comm.get_size("cp")
+                inp_grad_gather, dim=1, shapes=None, comm_name="sp1-sp2"
+            ) / comm.get_size("sp1-sp2")
             err = torch.mean(
                 torch.norm(inp_grad - inp_grad_gather, p=2, dim=(1, 2))
                 / torch.norm(inp_grad, p=2, dim=(1, 2))
@@ -282,7 +282,10 @@ class TestDistributed(unittest.TestCase):
         #############################################################
         # evaluate wgrads
         #############################################################
-        dist_grads_full = self._get_reconstructed_grads(model_distributed.module) / comm.get_size("cp")
+        dist_grads_full = (
+            self._get_reconstructed_grads(model_distributed.module)
+            / comm.get_size("sp1-sp2")
+        )
         # Compare with the non-distributed gradients
         grad_diff = non_dist_grads - dist_grads_full
         err = grad_diff.norm().item() / non_dist_grads.norm().item()

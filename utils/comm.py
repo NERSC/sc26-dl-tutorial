@@ -89,21 +89,26 @@ def init(params, verbose=False):
 
     # set model parallel sizes
     tp = params.get("tp", 1)
-    cp = params.get("cp", 1)
-    pp = params.get("pp", 1)
-    assert pp == 1, "ERROR: pipeline parallel not implemented"
-    model_parallel_size = tp * cp * pp
+    sp1 = params.get("sp1", 1)
+    sp2 = params.get("sp2", 1)
+    model_parallel_size = tp * sp1 * sp2
+    assert get_world_size() % model_parallel_size == 0, (
+        f"ERROR: world size {get_world_size()} is not divisible by "
+        f"tp*sp1*sp2={model_parallel_size}"
+    )
     dp = get_world_size() // model_parallel_size
     assert dp >= 1, "ERROR: data parallel wireup failed since dp = {}".format(dp)
-    logging.info("Setting DP = {}, TP = {}, CP = {}, PP = {}".format(dp, tp, cp, pp))
+    logging.info(
+        "Setting DP = {}, TP = {}, SP1 = {}, SP2 = {}".format(dp, tp, sp1, sp2)
+    )
 
     # init model + dp groups individually
     init_model_parallel_info(
-        tp=tp,
-        cp=cp,
         dp=dp,
-        pp=pp,
-        order=params.get("order", "tp-dp"),
+        tp=tp,
+        sp1=sp1,
+        sp2=sp2,
+        order=params.get("order", "tp-sp1-sp2-dp"),
         verbose=verbose,
     )
 
@@ -134,22 +139,30 @@ def init_process_group():
         )
 
 
-def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=False):
+def init_model_parallel_info(
+    dp=1, tp=1, sp1=1, sp2=1, order="tp-sp1-sp2-dp", verbose=False
+):
 
     world_size = get_world_size()
     world_rank = get_world_rank()
+    expected_world_size = dp * tp * sp1 * sp2
+    if world_size != expected_world_size:
+        raise ValueError(
+            f"World size {world_size} does not match "
+            f"dp*tp*sp1*sp2={expected_world_size}"
+        )
 
     rank_gen = RankGenerator(
-        tp=tp,
         dp=dp,
-        pp=pp,
-        cp=cp,
+        tp=tp,
+        sp1=sp1,
+        sp2=sp2,
         order=order,
     )
 
     def generator_wrapper(group_type, **kwargs):
         """The `RankGenerator` class produces a hyper-rectangle for a given set of
-        tensor, pipeline, data, and context parallelism.
+        data, tensor, and two-dimensional spatial parallelism.
         """
         ranks = rank_gen.get_ranks(group_type, **kwargs)
         for x in ranks:
@@ -157,7 +170,15 @@ def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=Fals
 
     # build the different parallel groups
     global _COMM_GROUPS  # others need access to this
-    groups_to_build = ["dp", "tp", "cp", "pp", "tp-cp", "dp-cp"]
+    groups_to_build = [
+        "dp",
+        "tp",
+        "sp1",
+        "sp2",
+        "sp1-sp2",
+        "tp-sp1-sp2",
+        "dp-sp1-sp2",
+    ]
     for grp in groups_to_build:
         for ranks in generator_wrapper(grp):
             group = dist.new_group(ranks)
@@ -167,7 +188,7 @@ def init_model_parallel_info(tp=1, pp=1, dp=1, cp=1, order="tp-dp", verbose=Fals
 
 def process_comm_list(input_list):
     """Given a list of comms, merge them
-    Ex: ['tp', 'cp'] is ['tp-cp']
+    Ex: ['tp', 'sp1'] is ['tp-sp1']
     """
     if not input_list or all(item is None for item in input_list):
         return []

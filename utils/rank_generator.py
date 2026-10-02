@@ -11,49 +11,51 @@ Taken from MegatronLM: https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/
 def generate_masked_orthogonal_rank_groups(
     world_size: int, parallel_size: List[int], mask: List[bool]
 ) -> List[List[int]]:
-    """Generate orthogonal parallel groups based on the parallel size and mask.
+    r"""Generate orthogonal parallel groups based on the parallel size and mask.
 
     Arguments:
         world_size (int): world size
 
         parallel_size (List[int]):
             The parallel size of each orthogonal parallel type. For example, if
-            tensor_parallel_size = 2, pipeline_model_parallel_group = 3, data_parallel_size = 4,
-            and the parallel mapping order is tp-pp-dp, then the parallel_size = [2, 3, 4].
+            tensor_parallel_size = 2, spatial_parallel_1_size = 3,
+            data_parallel_size = 4, and the parallel mapping order is tp-sp1-dp,
+            then the parallel_size = [2, 3, 4].
 
         mask (List[bool]):
             The mask controls which parallel methods the generated groups represent. If mask[i] is
             True, it means the generated group contains the i-th parallelism method. For example,
-            if parallel_size = [tp_size, pp_size, dp_size], and mask = [True, False , True], then
+            if parallel_size = [tp_size, sp1_size, dp_size], and mask = [True, False, True], then
             the generated group is the `tp-dp` group, if the mask = [False, True, False], then the
-            generated group is the `pp` group.
+            generated group is the `sp1` group.
 
     Algorithm:
-        For orthogonal parallelism, such as tp/dp/pp/cp, the global_rank and
+        For orthogonal parallelism, such as dp/tp/sp1/sp2, the global_rank and
         local_rank satisfy the following equation:
-            global_rank = tp_rank + dp_rank * tp_size + pp_rank * tp_size * dp_size (1)
+            global_rank = tp_rank + sp1_rank * tp_size
+                          + dp_rank * tp_size * sp1_size (1)
                 tp_rank \in [0, tp_size)
+                sp1_rank \in [0, sp1_size)
                 dp_rank \in [0, dp_size)
-                pp_rank \in [0, pp_size)
 
-        If we want to get the `dp_group` (tp_size * pp_size groups of dp_size ranks each.
-        For example,  if the gpu size is 8 and order is 'tp-pp-dp', size is '2-2-2', and the
+        If we want to get the `dp_group` (tp_size * sp1_size groups of dp_size ranks each.
+        For example, if the gpu size is 8 and order is 'tp-sp1-dp', size is '2-2-2', and the
         dp_group here is [[0, 4], [1, 5], [2, 6], [3, 7]].)
-        The tp_rank and pp_rank will be combined to form the `dp_group_index`.
-            dp_group_index = tp_rank + pp_rank * tp_size (2)
+        The tp_rank and sp1_rank will be combined to form the `dp_group_index`.
+            dp_group_index = tp_rank + sp1_rank * tp_size (2)
 
-        So, Given that tp_rank and pp_rank satisfy equation (2), and dp_rank in
+        So, given that tp_rank and sp1_rank satisfy equation (2), and dp_rank in
         range(0, dp_size), the ranks in dp_group[dp_group_index] satisfies the
         equation (1).
 
-        This function solve this math problem.
+        This function solves this math problem.
 
-    For example, if the parallel_size = [tp_size, dp_size, pp_size] = [2, 3, 4],
+    For example, if the parallel_size = [tp_size, dp_size, sp1_size] = [2, 3, 4],
     and the mask = [False, True, False]. Then,
-        dp_group_index(0) = tp_rank(0) + pp_rank(0) * 2
-        dp_group_index(1) = tp_rank(1) + pp_rank(0) * 2
+        dp_group_index(0) = tp_rank(0) + sp1_rank(0) * 2
+        dp_group_index(1) = tp_rank(1) + sp1_rank(0) * 2
         ...
-        dp_group_index(7) = tp_rank(1) + pp_rank(3) * 2
+        dp_group_index(7) = tp_rank(1) + sp1_rank(3) * 2
 
         dp_group[0] = 0 + range(0, 3) * 2 + 0 = [0, 2, 4]
         dp_group[1] = 1 + range(0, 3) * 2 + 0 = [1, 3, 5]
@@ -78,7 +80,7 @@ def generate_masked_orthogonal_rank_groups(
                 index = sum(idx[i] * stride[i])
             And given the value of index, stride.
             Return the idx.
-        This function will used to get the pp/dp/pp_rank
+        This function is used to get the coordinates for each parallel dimension
         from group_index and rank_in_group.
         """
         if stride is None:
@@ -121,20 +123,26 @@ class RankGenerator(object):
     """A class for generating rank groups for different modes of parallelism."""
 
     def __init__(
-        self, tp: int, dp: int, pp: int, cp: int, order: str, rank_offset: int = 0
+        self,
+        dp: int,
+        tp: int,
+        sp1: int,
+        sp2: int,
+        order: str,
+        rank_offset: int = 0,
     ) -> None:
-        self.tp = tp
         self.dp = dp
-        self.pp = pp
-        self.cp = cp
+        self.tp = tp
+        self.sp1 = sp1
+        self.sp2 = sp2
         self.rank_offset = rank_offset
-        self.world_size = tp * dp * pp * cp
+        self.world_size = dp * tp * sp1 * sp2
 
         self.name_to_size = {
-            "tp": self.tp,
-            "pp": self.pp,
             "dp": self.dp,
-            "cp": self.cp,
+            "tp": self.tp,
+            "sp1": self.sp1,
+            "sp2": self.sp2,
         }
         self.order = order
         order = order.lower()
@@ -159,7 +167,7 @@ class RankGenerator(object):
         """Create a mask for the specified tokens based on the given order.
 
         Args:
-            order (str): The order of parallelism types (e.g., 'tp-dp-pp').
+            order (str): The order of parallelism types (e.g., 'tp-sp1-sp2-dp').
             token (str): The specific parallelism types to include in the mask,
                          separated by hyphens (e.g., 'tp-dp').
         """
