@@ -492,19 +492,19 @@ Quick questions:
 
 Now that we are familiar with distributed data parallel training, we are ready to move to more advanced parallelism in the form of model parallelism. One of the main motivations to explore this dimension is the need to use a larger model and/or process higher resolution images: both these can lead to higher accuracies and/or better emulation of physical phenomena. However, they will inflate the memory consumption (activation and weights) as well as computational cost.  At some point, the model (activation and weights) will no longer fit on a single GPU and we need to partition/shard the model across multiple GPUs.
 
-We will increase our model size to motivate this partition and show you the building blocks of implementing model parallelism, motivated by the Megatron-style model parallelism. We will focus mostly on tensor parallelism here, although our implementation also includes [context parallelism](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html). Our goal is not to build the most efficient model parallel network (which can require significantly more care and development and would parallelize on other dimensions as well) but rather to serve as an instructive blueprint on how to get started on parallelizing your own model in PyTorch. For all the bells and whistles, see [Megatron-LM](https://github.com/NVIDIA/Megatron-LM/tree/main/megatron/core) for deep details.
+We will increase our model size to motivate this partition and show you the building blocks of implementing model parallelism, motivated by Megatron-style model parallelism. We will focus mostly on tensor parallelism here, while also supporting two spatial mesh dimensions, `sp1` and `sp2`. For ViT, the flattened token sequence is sharded over the combined `sp1-sp2` group, using the communication pattern commonly called [context parallelism](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html). Future 2D models can also communicate independently along either spatial axis. Our goal is not to build the most efficient model parallel network but to provide an instructive blueprint for parallelizing scientific models in PyTorch.
 
 
 ### Setting up the communicator groups
 
 We typically assume a `MxD` grid of GPUs where we use data parallelism (as before) across D GPUs and split the model across `M` GPUs. Take a look at [`utils/comm.py`](utils/comm.py) where this is setup. The logic is more general where we could split the `M` GPUs into more orthogonal groups (example: `M = M_1 x M_2`) for parallelism on more dimensions.
 
-We will use the same naming convention as Megatron with `dp` referring to data parallelism, `tp` referring to tensor parallelism, `cp` referring to context parallelism (or spatial parallelism in our case) and `pp` for pipeline parallelism. We will implement `dp`, `tp`, and `cp` in our tutorial. These are more relevant to science use-cases with high resolution inputs (and hence more activation memory pressure). Hence, our grid of GPUs is: `total gpus = dp x cp x tp` (setting `pp = 1`). Together, `tp` and `cp` make up our model parallel group (M GPUs, with `M = tp x cp`) and data parallel group is orthogonal to this (D GPUS with `D = dp`)
+Our mesh dimensions are `dp` for data parallelism, `tp` for tensor parallelism, and `sp1`/`sp2` for the two spatial axes. Thus, `total GPUs = dp x tp x sp1 x sp2`. Together, `tp`, `sp1`, and `sp2` form the model-parallel group, while `dp` is orthogonal. ViT flattens the `sp1 x sp2` spatial mesh into one context-parallel group; models with native 2D layouts can use the axes independently.
 
  
 Here's a quick example: Let's say we have 8 GPUs in total and we want to do 4-way tensor parallelism `tp` and 2-way data parallelism `dp`. The logic would simply have the `tp` group (each has 4 GPUs) ranks as `[0, 1, 2, 3], [4, 5, 6, 7]` and `dp` in the orthogonal dimension (each has 2 GPUs) as: `[0, 4], [1, 5], [2, 6], [3, 7]`. So, let's say, we are looking at what work rank `5` is doing -- then, all `tp` communications will happen within the group `[4, 5, 6, 7]` and `dp` gradient reduction across `[1, 5]`.  For this communication, we tell `torch.distributed` about the groups by creating them with `torch.distributed.new_group(ranks = grp)` and for any communication collectives such as `torch.distributed.all_reduce`, we simply pass the group to the [function call](https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_reduce).
 
-Take a look at ['utils/check_rank_generator.ipynb'](utils/check_rank_generator.ipynb) to play around with this communicator group generator. Try assigning different amount of GPUs to each parallelization group. The `order` parameter controls the order of assignment of ranks . Example: order `tp-cp-dp` would keep the `tp` GPUs closest, followed by `cp` and then `dp`. Closer GPUs will be on the same node (usually) and can take advantage of fast bandwidth like NVLink. 
+Take a look at ['utils/check_rank_generator.ipynb'](utils/check_rank_generator.ipynb) to play around with this communicator group generator. Try assigning different numbers of GPUs to each parallelization group. The `order` parameter controls rank assignment. For example, `tp-sp1-sp2-dp` keeps `tp` ranks closest, followed by the two spatial dimensions and then `dp`. Nearby ranks will usually be on the same node and can use fast links such as NVLink.
 
 Another thing to note is that we need to only use the `dp` groups for the data loading purposes -- this means that the data for each model parallel group (e.g. `[4, 5, 6, 7]`) should be the same. This is taken care of in [`train_mp.py`](train_mp.py) with the lines:
 
@@ -524,7 +524,8 @@ linear layers, is implemented in
 column-parallel layers use `identity_forward_allreduce_backward()`. Their
 paired custom `autograd.Function` mappings are implemented in
 [`distributed/mappings.py`](distributed/mappings.py). Gather/split and
-gather/reduce-scatter mappings handle context parallelism over the `cp` group.
+gather/reduce-scatter mappings handle ViT sequence sharding over the `sp1`
+group.
 
 ### Testing model parallel code (optional)
 
@@ -570,10 +571,10 @@ Note that the distributed model's out_features is 1/4th of the original model's 
 
 ### Running the model parallel code
 
-The train script for model-parallel training is at [`train_mp.py`](train_mp.py). The model parallel size is defined by `tp` and `cp`. Let's first focus on just tensor parallelism `tp`. Setting the parameter `tensor_parallel` to `4`, for example, will enable 4-way tensor/model parallelism. Let's run a larger model by increasing our `embed_dim` to `1024`. The config for this is called `mp` which trains the larger model assuming a global batch size of `64` with 4 GPUs for data parallelism (hence local batch size is `16`). Let's initially try running this larger model with _no_ model parallelism by setting `tensor_parallel=1` and running it on 4 GPUs with the following command:
+The train script for model-parallel training is at [`train_mp.py`](train_mp.py). The model-parallel size is `tp x sp1 x sp2`. Let's first focus on tensor parallelism. Setting `--tp=4` enables four-way tensor parallelism. The `mp` configuration increases `embed_dim` to `1024` and uses a global batch size of `64`. First, run with no model parallelism:
 
 ```
-sbatch --nodes 1 submit_pm_mp.sh --config=mp --tensor_parallel=1 --run_num=tp1cp1
+sbatch --nodes=1 submit_pm_mp.sh --config=mp --tp=1 --sp1=1 --sp2=1 --run_num=tp1sp1
 ```
 
 If this job runs on 40G GPUs on Perlmutter, we can see from the logs that the job crashes with an OOM signal because the model is too big:
@@ -585,12 +586,12 @@ If this job runs on 40G GPUs on Perlmutter, we can see from the logs that the jo
 If we run it on an 80G GPU, we can see the estimated memory usage to be around 45GB and hence just overflows the 40G GPU. While this example is instructive, larger models (and/or larger inputs) can push the memory consumption significantly higher.
 
 
-Let's run it with `tensor_parallel=4`, which will partition/shard the hidden dimensions of the MLP weights and biases as well as the attention heads.
+Let's run it with `--tp=4`, which shards the hidden dimensions of the MLP weights and biases as well as the attention heads.
 
 Note here that 4 GPUs are used for model parallelism. Recall our global batch size is `64`. How many GPUs do we need? We also want 4-way data parallel, in addition to model parallelism, here: therefore, we should run on 16 GPUs (or 4 nodes on Perlmutter). Remember that we are assuming `tp x dp` GPUs always. Run this config with the command:
 
 ```
-sbatch --nodes 4 submit_pm_mp.sh --config=mp --tensor_parallel=4 --run_num=tp4cp1
+sbatch --nodes=4 submit_pm_mp.sh --config=mp --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1
 ```
 
 ```
@@ -625,7 +626,7 @@ We also see that the bigger model gets a better RMSE compared to the batch size 
 You can also profile the model parallel code the same way as before. You can use the config `mp_short` to limit the samples (else your profile will be too large). For example, try running:
 
 ```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=mp_tp4 sbatch --nodes 4 submit_pm_mp.sh --config=mp_short --tensor_parallel=4 --run_num=tp4cp1_profile
+ENABLE_PROFILING=1 PROFILE_OUTPUT=mp_tp4 sbatch --nodes=4 submit_pm_mp.sh --config=mp_short --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1_profile
 ```
 
 You will see something like this if you zoomed into the NCCL sections of the profile [mp_tp4.nsys-rep](sample_nsys_profiles/mp_tp4.nsys-rep).
@@ -668,7 +669,7 @@ Similarly for self-attention, you can TE's self-attention module. See [our imple
 You can turn on TE by using the config `mp_te`. For example, try running:
 
 ```
-sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tensor_parallel=4 --run_num=tp4cp1
+sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1
 ```
 
 This will run TP=4 with the TE model. You should see the following log:
@@ -698,7 +699,7 @@ TE's TP is faster and more memory efficient.
 You can profile this as well. For example, try running:
 
 ```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=mp_te_tp4 sbatch --nodes=4 submit_pm_mp.sh --config=mp_te_short --tensor_parallel=4 --run_num=tp4cp1_profile
+ENABLE_PROFILING=1 PROFILE_OUTPUT=mp_te_tp4 sbatch --nodes=4 submit_pm_mp.sh --config=mp_te_short --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1_profile
 ```
 
 You should see something like this if you zoomed into the NCCL sections of the profile [mp_te_tp4.nsys-rep](sample_nsys_profiles/mp_te_tp4.nsys-rep).
@@ -707,14 +708,14 @@ You should see something like this if you zoomed into the NCCL sections of the p
 
 You will see the same kind of NCCL calls, except with more automatic annotations that TE inserts. For example, above we have zoomed into the MLP section that requires a sync. You can see the first linear layer without any syncs and calling an optimized linear CUDA kernel and the second layer containing the all-reduce sync after the linear layer.
 
-#### More advanced material with context parallelism (optional)
-For high resolution images (common in many scientific problems), it might be more beneficial to shard the sequence (spatial) dimension. We can do this using context parallelism. See the [Megatron-core explanation](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html) for the communication collectives we need for `cp`. Now we will use `tp x cp x dp` GPUs. For `cp`, the sequence sharding will require additional `allgather` and `reduce-scatter` operations, which we have implemented. Try running:
+#### More advanced material with spatial parallelism (optional)
+For high-resolution images, it can be beneficial to shard spatial dimensions. ViT flattens its patches into one sequence, so it treats the combined `sp1-sp2` group as transformer context parallelism. Attention over this group requires additional all-gather and reduce-scatter operations. Try running:
 
 ```
-sbatch --nodes 4 submit_pm_mp.sh --config=mp --tensor_parallel=1 --context_parallel=4 --parallel_order=cp-tp-dp --run_num=tp1cp4
+sbatch --nodes=4 submit_pm_mp.sh --config=mp --tp=1 --sp1=4 --sp2=1 --order=sp1-tp-sp2-dp --run_num=tp1sp4
 ```
 
-Now, we are using just context parallelism (so all model parallel GPUs are used to shard the sequence). Be careful, since this means that the weights are *shared* across the `cp` GPUs.
+Now all spatial-parallel GPUs shard the flattened sequence over `sp1-sp2`. The weights are shared across that combined spatial group.
 
 *Question: If weights are shared across any model parallel GPUs, what considerations should we keep in mind?*
   
@@ -725,13 +726,13 @@ trainable distributed-model parameter has `comm_metadata`, for example:
 ```
 self.weight.comm_metadata = {
     "sharded": ["tp", None],
-    "shared": ["cp"],
-    "reduce": ["cp"],
+    "shared": ["sp1-sp2"],
+    "reduce": ["sp1-sp2"],
 }
 ```
-Shared weights need to have the same initialization (see [our implementation here](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/helpers.py#L5-L30)). If the input activation grads are sharded, then the weight gradients for the shared weights need an additional AllReduce. Check out the [comm_hooks](https://github.com/NERSC/sc25-dl-tutorial/blob/main/distributed/mappings.py#L224-L279), we have implemented to do an additional AllReduce of the weight gradients across the `cp` group. 
+Shared weights need identical initialization. If input activation gradients are spatially sharded, their weight gradients need an additional all-reduce over `sp1-sp2`; the DDP communication hooks implement this reduction.
 
-With CP=4, you will see:
+With `sp1 x sp2 = 4`, you will see:
 
 ```
 2025-11-11 17:50:06,957 - root - INFO -  Memory usage after forward pass: 24.1405029296875 GB.
@@ -748,16 +749,16 @@ With CP=4, you will see:
 2025-11-11 18:01:55,113 - root - INFO - Time taken for epoch 3 is 229.243580 sec, avg 165.553164 samples/sec
 ```
 
-*Question: Why is CP faster than TP in this case?*
+*Question: Why is spatial parallelism faster than TP in this case?*
 
-**Note:** The right combination of data, tensor, context, and pipeline (if needed) parallelism along with the parallelization order (which group to place on NVLink, for example) requires deep understanding of the sensitivity of the performance to each of these moving parts (as well as the underlying hardware). Typically, engineers build *performance models* to analyze this and discover *optimal* ways to parallelize their model. If you are interested in going deeper and building this intuition, you can check out [performance models for transformers in science](https://arxiv.org/abs/2410.00273).
+**Note:** Choosing data, tensor, and spatial degrees and their rank order requires understanding both model communication and hardware topology. Engineers typically use performance models to identify good layouts. See [performance models for transformers in science](https://arxiv.org/abs/2410.00273) for more detail.
 
-You can also run CP with the TE model by using the config `mp_te`. For example, try running:
+You can also run the combined spatial group with the TE model using `mp_te`:
 ```
-sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tensor_parallel=1 --context_parallel=4 --parallel_order=cp-tp-dp --run_num=tp1cp4
+sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tp=1 --sp1=4 --sp2=1 --order=sp1-tp-sp2-dp --run_num=tp1sp4
 ```
 
-**Note:** TE expects the local sequence lengths to be even for CP and equal on each CP rank. In our case, with CP=4, our sequence length (360 / 8 * 720 / 8 = 4050) gets split unevenly and with odd values. Hence, it is necessary to pad the sequence length to the next even value. We do this in the [vit_te.py](networks/vit_te.py#L185-L199) file. Hence, we pay a little extra compute. In general, if your workload deviates from the language model paradigm, then you may not be able to use TE directly out-of-the-box.
+**Note:** TE calls this operation context parallelism and expects local sequence lengths to be even and equal. With `sp1 x sp2 = 4`, our sequence length `(360 / 8) * (720 / 8) = 4050` splits unevenly, so [`vit_te.py`](networks/vit_te.py) pads local sequences before calling TE. This adds some compute.
 
 
 ### Using CUDA Graphs (optional)

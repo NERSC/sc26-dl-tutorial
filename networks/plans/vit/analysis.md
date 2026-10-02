@@ -105,7 +105,7 @@ prefetching, and allocator overhead.
 
 | Bottleneck | Evidence | Candidate sharding dimensions |
 | --- | --- | --- |
-| Saved activations | 34.091 GB versus 3.022 GB for weights, gradients, and Adam states | Batch with DP; sequence with CP; TP intermediates |
-| Attention compute | 13.194 forward TFLOPs and quadratic scaling in `l=4096` | Heads with TP; query context with CP |
+| Saved activations | 34.091 GB versus 3.022 GB for weights, gradients, and Adam states | Batch with DP; flattened sequence with SP1 x SP2; TP intermediates |
+| Attention compute | 13.194 forward TFLOPs and quadratic scaling in `l=4096` | Heads with TP; query sequence with SP1 x SP2 |
 | MLP compute | 13.194 forward TFLOPs across FC1 and FC2 | Intermediate width `f` with TP |
-| Unsharded model boundaries | Patch convolution and reconstruction head each cost 2.199 TFLOPs | Batch with DP; current implementation replicates these over TP/CP |
+| Unsharded model boundaries | Patch convolution and reconstruction head each cost 2.199 TFLOPs | Batch with DP; current implementation replicates these over TP/SP1/SP2 |

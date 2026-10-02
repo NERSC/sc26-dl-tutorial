@@ -32,15 +32,15 @@ class ColumnParallelLinear(nn.Module):
         )
         self.weight.comm_metadata = {
             "sharded": ["tp", None],
-            "shared": ["cp"],
-            "reduce": ["cp"],
+            "shared": ["sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
         if bias:
             self.bias = nn.Parameter(torch.empty(self.out_features_local))
             self.bias.comm_metadata = {
                 "sharded": ["tp"],
-                "shared": ["cp"],
-                "reduce": ["cp"],
+                "shared": ["sp1-sp2"],
+                "reduce": ["sp1-sp2"],
             }
         else:
             self.register_parameter("bias", None)
@@ -72,15 +72,15 @@ class RowParallelLinear(nn.Module):
         )
         self.weight.comm_metadata = {
             "sharded": [None, "tp"],
-            "shared": ["cp"],
-            "reduce": ["cp"],
+            "shared": ["sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features))
             self.bias.comm_metadata = {
                 "sharded": [None],
-                "shared": ["tp-cp"],
-                "reduce": ["cp"],
+                "shared": ["tp-sp1-sp2"],
+                "reduce": ["sp1-sp2"],
             }
         else:
             self.register_parameter("bias", None)
@@ -133,7 +133,7 @@ class Attention(nn.Module):
         qkv_bias=False,
         attn_drop=0.0,
         proj_drop=0.0,
-        cp_shapes=None,
+        spatial_shapes=None,
     ):
         super().__init__()
         if dim % num_heads != 0:
@@ -146,7 +146,7 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         self.num_heads_local = num_heads // tp_size
         self.head_dim = dim // num_heads
-        self.cp_shapes = cp_shapes
+        self.spatial_shapes = spatial_shapes
         self.q = ColumnParallelLinear(dim, dim, bias=qkv_bias)
         self.k = ColumnParallelLinear(dim, dim, bias=qkv_bias)
         self.v = ColumnParallelLinear(dim, dim, bias=qkv_bias)
@@ -167,10 +167,10 @@ class Attention(nn.Module):
         ).permute(0, 2, 1, 3)
 
         k = allgather_forward_reducescatter_backward(
-            k, dim=2, shapes=self.cp_shapes, comm_name="cp"
+            k, dim=2, shapes=self.spatial_shapes, comm_name="sp1-sp2"
         )
         v = allgather_forward_reducescatter_backward(
-            v, dim=2, shapes=self.cp_shapes, comm_name="cp"
+            v, dim=2, shapes=self.spatial_shapes, comm_name="sp1-sp2"
         )
         x = F.scaled_dot_product_attention(
             q,
@@ -192,14 +192,14 @@ class LayerNorm(nn.LayerNorm):
         if self.elementwise_affine:
             self.weight.comm_metadata = {
                 "sharded": [None],
-                "shared": ["tp-cp"],
-                "reduce": ["cp"],
+                "shared": ["tp-sp1-sp2"],
+                "reduce": ["sp1-sp2"],
             }
             if self.bias is not None:
                 self.bias.comm_metadata = {
                     "sharded": [None],
-                    "shared": ["tp-cp"],
-                    "reduce": ["cp"],
+                    "shared": ["tp-sp1-sp2"],
+                    "reduce": ["sp1-sp2"],
                 }
 
 
@@ -215,7 +215,7 @@ class Block(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=LayerNorm,
-        cp_shapes=None,
+        spatial_shapes=None,
     ):
         super().__init__()
         hidden_dim = int(dim * mlp_ratio)
@@ -230,7 +230,7 @@ class Block(nn.Module):
             qkv_bias=qkv_bias,
             attn_drop=attn_drop,
             proj_drop=drop,
-            cp_shapes=cp_shapes,
+            spatial_shapes=spatial_shapes,
         )
         self.mlp = MLP(
             in_features=dim,
@@ -267,12 +267,12 @@ class PatchEmbed(nn.Module):
         )
         self.proj.weight.comm_metadata = {
             "sharded": [None, None, None, None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
         self.proj.bias.comm_metadata = {
             "sharded": [None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
 
@@ -310,15 +310,15 @@ class VisionTransformer(nn.Module):
             embed_dim=embed_dim,
         )
         num_patches = self.patch_embed.num_patches
-        self.cp_shapes = compute_split_shapes(
-            num_patches, comm.get_size("cp")
+        self.spatial_shapes = compute_split_shapes(
+            num_patches, comm.get_size("sp1-sp2")
         )
         self.pos_embed = nn.Parameter(
             torch.zeros(1, num_patches, embed_dim)
         )
         self.pos_embed.comm_metadata = {
             "sharded": [None, None, None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -334,7 +334,7 @@ class VisionTransformer(nn.Module):
                     attn_drop=attn_drop_rate,
                     drop_path=drop_path[index],
                     norm_layer=norm_layer,
-                    cp_shapes=self.cp_shapes,
+                    spatial_shapes=self.spatial_shapes,
                 )
                 for index in range(depth)
             ]
@@ -344,7 +344,7 @@ class VisionTransformer(nn.Module):
         self.head = nn.Linear(embed_dim, self.out_size, bias=False)
         self.head.weight.comm_metadata = {
             "sharded": [None, None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
 
@@ -391,13 +391,13 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
         x = self.prepare_tokens(x)
         x = split_forward_allgather_backward(
-            x, dim=1, shapes=self.cp_shapes, comm_name="cp"
+            x, dim=1, shapes=self.spatial_shapes, comm_name="sp1-sp2"
         )
         for block in self.blocks:
             x = block(x)
         x = self.norm(x)
         x = allgather_forward_split_backward(
-            x, dim=1, shapes=self.cp_shapes, comm_name="cp"
+            x, dim=1, shapes=self.spatial_shapes, comm_name="sp1-sp2"
         )
         return self.forward_head(x)
 

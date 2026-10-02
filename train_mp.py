@@ -61,7 +61,7 @@ def train(params, writer, local_rank, world_rank):
         model = torch.compile(model)
 
     # weight initialization needs to be synced across shared weights
-    if comm.get_size("tp-cp") > 1:
+    if comm.get_size("tp-sp1-sp2") > 1:
         init_params_for_shared_weights(model)
 
     if params.distributed:
@@ -263,20 +263,26 @@ if __name__ == "__main__":
 
     # model parallelism arguments
     parser.add_argument(
-        "--tensor_parallel",
+        "--tp",
         default=1,
         type=int,
         help="Number of GPUs for tensor parallelism",
     )
     parser.add_argument(
-        "--context_parallel",
+        "--sp1",
         default=1,
         type=int,
-        help="Number of GPUs for context parallelism",
+        help="Number of GPUs along the first spatial dimension",
     )
     parser.add_argument(
-        "--parallel_order",
-        default="tp-cp-dp",
+        "--sp2",
+        default=1,
+        type=int,
+        help="Number of GPUs along the second spatial dimension",
+    )
+    parser.add_argument(
+        "--order",
+        default="tp-sp1-sp2-dp",
         type=str,
         help="Order of ranks for parallelism",
     )
@@ -290,9 +296,10 @@ if __name__ == "__main__":
     params.distributed = False
 
     # setup model parallel sizes
-    params["tp"] = args.tensor_parallel
-    params["cp"] = args.context_parallel
-    params["order"] = args.parallel_order
+    params["tp"] = args.tp
+    params["sp1"] = args.sp1
+    params["sp2"] = args.sp2
+    params["order"] = args.order
     # initialize comm
     comm.init(params, verbose=True)
 
@@ -317,7 +324,11 @@ if __name__ == "__main__":
     # Set up directory
     baseDir = params.expdir
     expDir = os.path.join(
-        baseDir, args.config + "/%dMP/" % (comm.get_size("tp-cp")) + str(run_num) + "/"
+        baseDir,
+        args.config
+        + "/%dMP/" % (comm.get_size("tp-sp1-sp2"))
+        + str(run_num)
+        + "/",
     )
     writer = None
     if world_rank == 0:

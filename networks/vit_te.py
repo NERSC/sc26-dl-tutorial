@@ -27,7 +27,7 @@ class MLP(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        if comm.get_size("tp-cp") > 1:
+        if comm.get_size("tp-sp1-sp2") > 1:
             tp_group = comm.get_group("tp")
             tp_size = comm.get_size("tp")
         else:
@@ -59,23 +59,23 @@ class MLP(nn.Module):
 
         self.fc1.weight.comm_metadata = {
             "sharded": ["tp", None],
-            "shared": ["cp"],
-            "reduce": ["cp"],
+            "shared": ["sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
         self.fc1.bias.comm_metadata = {
             "sharded": ["tp"],
-            "shared": ["cp"],
-            "reduce": ["cp"],
+            "shared": ["sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
         self.fc2.weight.comm_metadata = {
             "sharded": [None, "tp"],
-            "shared": ["cp"],
-            "reduce": ["cp"],
+            "shared": ["sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
         self.fc2.bias.comm_metadata = {
             "sharded": [None],
-            "shared": ["tp-cp"],
-            "reduce": ["cp"],
+            "shared": ["tp-sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
 
     def forward(self, x):
@@ -95,20 +95,18 @@ class Attention(nn.Module):
         self.head_dim = dim // num_heads
 
         # do we need this? will te default to sequential from the size?
-        if comm.get_size("tp-cp") > 1:
+        if comm.get_size("tp-sp1-sp2") > 1:
             tp_group = comm.get_group("tp")
-            cp_group = comm.get_group("cp")
+            spatial_group = comm.get_group("sp1-sp2")
             tp_size = comm.get_size("tp")
-            cp_size = comm.get_size("cp")
-            cp_ranks = torch.distributed.get_process_group_ranks(cp_group)
-            cp_stream = torch.cuda.Stream()
+            spatial_ranks = torch.distributed.get_process_group_ranks(spatial_group)
+            spatial_stream = torch.cuda.Stream()
         else:
             tp_group = None
-            cp_group = None
+            spatial_group = None
             tp_size = 1
-            cp_size = 1
-            cp_ranks = []
-            cp_stream = None
+            spatial_ranks = []
+            spatial_stream = None
 
         # tp shards heads
         self.num_heads_local = num_heads // tp_size
@@ -156,10 +154,10 @@ class Attention(nn.Module):
             sequence_parallel=False,
             tp_group=tp_group,
             tp_size=tp_size,
-            cp_group=cp_group,
-            cp_global_ranks=cp_ranks,
+            cp_group=spatial_group,
+            cp_global_ranks=spatial_ranks,
             cp_comm_type="p2p",
-            cp_stream=cp_stream,
+            cp_stream=spatial_stream,
         )
 
         self.proj = te.Linear(
@@ -177,32 +175,37 @@ class Attention(nn.Module):
         for projection in (self.q, self.k, self.v):
             projection.weight.comm_metadata = {
                 "sharded": ["tp", None],
-                "shared": ["cp"],
-                "reduce": ["cp"],
+                "shared": ["sp1-sp2"],
+                "reduce": ["sp1-sp2"],
             }
             if projection.bias is not None:
                 projection.bias.comm_metadata = {
                     "sharded": ["tp"],
-                    "shared": ["cp"],
-                    "reduce": ["cp"],
+                    "shared": ["sp1-sp2"],
+                    "reduce": ["sp1-sp2"],
                 }
         self.proj.weight.comm_metadata = {
             "sharded": [None, "tp"],
-            "shared": ["cp"],
-            "reduce": ["cp"],
+            "shared": ["sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
         self.proj.bias.comm_metadata = {
             "sharded": [None],
-            "shared": ["tp-cp"],
-            "reduce": ["cp"],
+            "shared": ["tp-sp1-sp2"],
+            "reduce": ["sp1-sp2"],
         }
 
     def _pad(self, x):
         B, N, C = x.shape
-        if comm.get_size("tp-cp") > 1:
+        if comm.get_size("tp-sp1-sp2") > 1:
             N_tensor = torch.tensor([N], dtype=torch.long, device=x.device)
-            N_list = [torch.zeros_like(N_tensor) for _ in range(comm.get_size("tp-cp"))]
-            torch.distributed.all_gather(N_list, N_tensor, group=comm.get_group("tp-cp"))
+            N_list = [
+                torch.zeros_like(N_tensor)
+                for _ in range(comm.get_size("tp-sp1-sp2"))
+            ]
+            torch.distributed.all_gather(
+                N_list, N_tensor, group=comm.get_group("tp-sp1-sp2")
+            )
             max_N = max([n.item() for n in N_list])
             if max_N % 2 != 0:
                 max_N += 1
@@ -234,7 +237,14 @@ class Attention(nn.Module):
         return x
 
 class LayerNorm(nn.Module):
-    def __init__(self, normalized_shape, comm_tp_name="tp", comm_cp_name="cp", eps=1e-05, elementwise_affine=True):
+    def __init__(
+        self,
+        normalized_shape,
+        comm_tp_name="tp",
+        comm_spatial_name="sp1-sp2",
+        eps=1e-05,
+        elementwise_affine=True,
+    ):
         super().__init__()
 
         if elementwise_affine:
@@ -253,14 +263,14 @@ class LayerNorm(nn.Module):
         if elementwise_affine:
             self.norm.weight.comm_metadata = {
                 "sharded": [None],
-                "shared": ["tp-cp"],
-                "reduce": [comm_cp_name],
+                "shared": ["tp-sp1-sp2"],
+                "reduce": [comm_spatial_name],
             }
             if self.norm.bias is not None:
                 self.norm.bias.comm_metadata = {
                     "sharded": [None],
-                    "shared": ["tp-cp"],
-                    "reduce": [comm_cp_name],
+                    "shared": ["tp-sp1-sp2"],
+                    "reduce": [comm_spatial_name],
                 }
 
     def forward(self, x):
@@ -285,8 +295,12 @@ class Block(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        self.norm1 = norm_layer(dim, comm_tp_name="tp", comm_cp_name="cp")
-        self.norm2 = norm_layer(dim, comm_tp_name="tp", comm_cp_name="cp")
+        self.norm1 = norm_layer(
+            dim, comm_tp_name="tp", comm_spatial_name="sp1-sp2"
+        )
+        self.norm2 = norm_layer(
+            dim, comm_tp_name="tp", comm_spatial_name="sp1-sp2"
+        )
 
         self.attn = Attention(
             dim,
@@ -365,23 +379,25 @@ class VisionTransformer(nn.Module):
         )
         self.patch_embed.proj.weight.comm_metadata = {
             "sharded": [None, None, None, None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
         self.patch_embed.proj.bias.comm_metadata = {
             "sharded": [None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
         num_patches = self.patch_embed.num_patches
 
-        # if context parallel, split the sequence/context
-        self.cp_shapes = compute_split_shapes(num_patches, comm.get_size("cp"))
+        # ViT flattens both spatial mesh axes into one context-parallel group.
+        self.spatial_shapes = compute_split_shapes(
+            num_patches, comm.get_size("sp1-sp2")
+        )
 
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, self.embed_dim))
         self.pos_embed.comm_metadata = {
             "sharded": [None, None, None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -406,14 +422,16 @@ class VisionTransformer(nn.Module):
             ]
         )
 
-        self.norm = norm_layer(embed_dim, comm_tp_name="tp", comm_cp_name="cp")
+        self.norm = norm_layer(
+            embed_dim, comm_tp_name="tp", comm_spatial_name="sp1-sp2"
+        )
 
         self.out_size = self.out_ch * self.patch_size * self.patch_size
 
         self.head = nn.Linear(embed_dim, self.out_size, bias=False)
         self.head.weight.comm_metadata = {
             "sharded": [None, None],
-            "shared": ["tp-cp"],
+            "shared": ["tp-sp1-sp2"],
             "reduce": [],
         }
 
@@ -461,20 +479,20 @@ class VisionTransformer(nn.Module):
     def forward(self, x):
         x = self.prepare_tokens(x)
 
-        # split sequence if cp is on (shape of x is (batch, seq, embed))
+        # Split the flattened patch sequence over the full spatial mesh.
         x = split_forward_allgather_backward(
-            x, dim=1, shapes=self.cp_shapes, comm_name="cp"
+            x, dim=1, shapes=self.spatial_shapes, comm_name="sp1-sp2"
         )
 
-        # if cp is on, each block operates on a sequence shard
+        # Each block operates on a spatial-mesh-local sequence shard.
         for blk in self.blocks:
             x = blk(x)
 
         x = self.norm(x)
 
-        # gather sequence if cp is on
+        # Gather the flattened sequence over the full spatial mesh.
         x = allgather_forward_split_backward(
-            x, dim=1, shapes=self.cp_shapes, comm_name="cp"
+            x, dim=1, shapes=self.spatial_shapes, comm_name="sp1-sp2"
         )
 
         x = self.forward_head(x)
