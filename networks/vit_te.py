@@ -6,11 +6,6 @@ from networks.helpers import DropPath, trunc_normal_
 
 # mp stuff
 from utils import comm
-from distributed.helpers import compute_split_shapes
-from distributed.mappings import (
-    allgather_forward_split_backward,
-    split_forward_allgather_backward,
-)
 
 import transformer_engine.pytorch as te
 
@@ -339,11 +334,19 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(
             in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
         )
+        self.proj.weight.comm_metadata = {
+            "sharded": [None, None, None, None],
+            "shared": ["tp-sp1-sp2"],
+            "reduce": ["sp1-sp2"],
+        }
+        self.proj.bias.comm_metadata = {
+            "sharded": [None],
+            "shared": ["tp-sp1-sp2"],
+            "reduce": ["sp1-sp2"],
+        }
 
     def forward(self, x):
-        B, C, H, W = x.shape
-        x = self.proj(x).flatten(2).transpose(1, 2)
-        return x
+        return self.proj(x).permute(0, 2, 3, 1)
 
 
 class VisionTransformer(nn.Module):
@@ -362,42 +365,43 @@ class VisionTransformer(nn.Module):
         attn_drop_rate=0.0,
         drop_path_rate=0.0,
         norm_layer=LayerNorm,
+        *,
+        spatial_shard,
         **kwargs
     ):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
         self.patch_size = patch_size
-        self.img_size = img_size
+        self.img_size = tuple(img_size)
+        self.spatial_shard = spatial_shard
         self.out_ch = out_chans
         self.drop_rate = drop_rate
+        if spatial_shard.global_shape != self.img_size:
+            raise ValueError(
+                "spatial shard global shape does not match ViT image size"
+            )
+        local_img_size = spatial_shard.local_shape
 
         self.patch_embed = PatchEmbed(
-            img_size=img_size,
+            img_size=local_img_size,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=self.embed_dim,
         )
-        self.patch_embed.proj.weight.comm_metadata = {
-            "sharded": [None, None, None, None],
-            "shared": ["tp-sp1-sp2"],
-            "reduce": [],
-        }
-        self.patch_embed.proj.bias.comm_metadata = {
-            "sharded": [None],
-            "shared": ["tp-sp1-sp2"],
-            "reduce": [],
-        }
-        num_patches = self.patch_embed.num_patches
-
         # ViT flattens both spatial mesh axes into one context-parallel group.
-        self.spatial_shapes = compute_split_shapes(
-            num_patches, comm.get_size("sp1-sp2")
-        )
+        self.spatial_shapes = list(spatial_shard.token_splits)
 
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, self.embed_dim))
+        self.pos_embed = nn.Parameter(
+            torch.zeros(
+                1,
+                self.patch_embed.h,
+                self.patch_embed.w,
+                self.embed_dim,
+            )
+        )
         self.pos_embed.comm_metadata = {
-            "sharded": [None, None, None],
-            "shared": ["tp-sp1-sp2"],
+            "sharded": [None, "sp1", "sp2", None],
+            "shared": ["tp"],
             "reduce": [],
         }
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -432,7 +436,7 @@ class VisionTransformer(nn.Module):
         self.head.weight.comm_metadata = {
             "sharded": [None, None],
             "shared": ["tp-sp1-sp2"],
-            "reduce": [],
+            "reduce": ["sp1-sp2"],
         }
 
         trunc_normal_(self.pos_embed, std=0.02)
@@ -457,11 +461,9 @@ class VisionTransformer(nn.Module):
                 nn.init.constant_(m.weight, 1.0)
 
     def prepare_tokens(self, x):
-        B, nc, h, w = x.shape
         x = self.patch_embed(x)  # patch linear embedding
-        # add positional encoding to each token
         x = x + self.pos_embed
-        return self.pos_drop(x)
+        return self.pos_drop(x).flatten(1, 2)
 
     def forward_head(self, x):
         B, _, _ = x.shape  # B x N x embed_dim
@@ -472,17 +474,19 @@ class VisionTransformer(nn.Module):
         x = self.head(x)
         x = x.reshape(shape=(B, h, w, self.patch_size, self.patch_size, self.out_ch))
         x = torch.einsum("nhwpqc->nchpwq", x)
-        x = x.reshape(shape=(B, self.out_ch, self.img_size[0], self.img_size[1]))
+        x = x.reshape(
+            shape=(
+                B,
+                self.out_ch,
+                self.patch_embed.img_size[0],
+                self.patch_embed.img_size[1],
+            )
+        )
 
         return x
 
     def forward(self, x):
         x = self.prepare_tokens(x)
-
-        # Split the flattened patch sequence over the full spatial mesh.
-        x = split_forward_allgather_backward(
-            x, dim=1, shapes=self.spatial_shapes, comm_name="sp1-sp2"
-        )
 
         # Each block operates on a spatial-mesh-local sequence shard.
         for blk in self.blocks:
@@ -490,16 +494,11 @@ class VisionTransformer(nn.Module):
 
         x = self.norm(x)
 
-        # Gather the flattened sequence over the full spatial mesh.
-        x = allgather_forward_split_backward(
-            x, dim=1, shapes=self.spatial_shapes, comm_name="sp1-sp2"
-        )
-
         x = self.forward_head(x)
         return x
 
 
-def ViT(params, **kwargs):
+def ViT(params, spatial_shard, **kwargs):
     model = VisionTransformer(
         img_size=params.img_size,
         in_chans=params.n_in_channels,
@@ -514,6 +513,7 @@ def ViT(params, **kwargs):
         drop_path_rate=params.dropout,
         drop_rate=params.dropout,
         attn_drop_rate=params.dropout,
+        spatial_shard=spatial_shard,
         **kwargs
     )
     return model

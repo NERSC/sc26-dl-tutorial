@@ -11,7 +11,7 @@ This analysis fixes the `mp` configuration in `config/ViT.yaml` and uses
 | Entry point | `train_mp.py -> networks.vit_mp.ViT(params)` |
 | Inputs | `inp: (16, 4, 4096, 4096)` |
 | Outputs | `(16, 4, 4096, 4096)` |
-| Loss | Mean relative L2 norm, `l2_loss_opt` |
+| Loss | Mean squared error, `mse_loss` |
 | Parameter dtype | FP32 |
 | Activation/compute dtype | BF16 model autocast; FP32 loss difference |
 | Optimizer-state dtype | FP32 |
@@ -55,7 +55,7 @@ Notation: `b=16`, `l=4096`, `e=1024`, `h=16`, `d=64`,
 | MLP FC2 | 12 | `b l f`, `f e` | `b l e` | `b l f, f e -> b l e` | Linear dgrad and wgrad |
 | Final LayerNorm | 1 | `b l e` | `b l e` | Normalize over `e` | Local dgrad and affine wgrads |
 | Reconstruction head | 1 | `b l e`, `e o` | `b 4 4096 4096` | Token linear followed by reshape | Linear dgrad and wgrad |
-| Relative L2 loss | 1 | Prediction and target | Scalar | `mean(||p-t||_2 / ||t||_2)` | FP32 gradient with respect to prediction |
+| MSE loss | 1 | Prediction and target | Scalar | `mean((p-t)^2)` | FP32 gradient with respect to prediction |
 
 ## Op Costs
 
@@ -75,7 +75,7 @@ estimates without activation checkpointing.
 | MLP FC2 | 12 | 50.344 | 0.201 | 6.442 | 6.597 | 13.194 |
 | Final LayerNorm | 1 | 0.002 | <0.001 | 0.134 | Elementwise | Elementwise |
 | Reconstruction head | 1 | 16.777 | 0.067 | 0.134 | 2.199 | 4.398 |
-| Relative L2 loss | 1 | 0 | 0 | 4.295 | Not counted | Not counted |
+| MSE loss | 1 | 0 | 0 | 4.295 | Not counted | Not counted |
 | **Total** | | **188.906** | **0.756** | **34.091** | **37.383** | **74.767** |
 
 The FLOP total includes convolution, linear layers, and attention matmuls.

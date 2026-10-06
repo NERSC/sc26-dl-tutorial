@@ -9,8 +9,12 @@ from nvidia.dali.pipeline import Pipeline
 import utils.dali_es_helper as esh
 
 
-def get_data_loader(params, data_path, distributed, train):
-    dataloader = SynDaliDataLoader(params, data_path, train)
+def get_data_loader(
+    params, data_path, distributed, train, spatial_shard=None
+):
+    dataloader = SynDaliDataLoader(
+        params, data_path, train, spatial_shard=spatial_shard
+    )
 
     if train:
         return dataloader, None, None
@@ -43,6 +47,8 @@ class SynDaliDataLoader:
                     self.num_shards,
                     self.shard_id,
                     self.limit_nsamples,
+                    spatial_shard=self.spatial_shard,
+                    spatial_read_mode=self.spatial_read_mode,
                     enable_logging=False,
                     seed=self.global_seed,
                 ),
@@ -78,7 +84,9 @@ class SynDaliDataLoader:
             pipeline.set_outputs(inp, tar)
         return pipeline
 
-    def __init__(self, params, data_path, train, seed=333):
+    def __init__(
+        self, params, data_path, train, spatial_shard=None, seed=333
+    ):
         self.global_seed = seed
         self.num_data_workers = params.num_data_workers
         self.device_index = torch.cuda.current_device()
@@ -91,6 +99,8 @@ class SynDaliDataLoader:
         self.n_in_channels = params.n_in_channels
         self.n_out_channels = params.n_out_channels
         self.img_size = params.img_size
+        self.spatial_shard = spatial_shard
+        self.spatial_read_mode = params.get("spatial_read_mode", "local")
         self.limit_nsamples = (
             params.limit_nsamples if train else params.limit_nsamples_val
         )
@@ -123,6 +133,8 @@ class SynDaliDataLoader:
             self.num_shards,
             self.shard_id,
             self.limit_nsamples,
+            spatial_shard=self.spatial_shard,
+            spatial_read_mode=self.spatial_read_mode,
             seed=self.global_seed,
         )
         self.num_batches = extsource.num_steps_per_epoch
