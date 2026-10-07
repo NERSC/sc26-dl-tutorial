@@ -15,8 +15,8 @@ from utils import logging_utils
 logging_utils.config_logger()
 from utils.YParams import YParams
 from utils import get_data_loader_distributed
-from utils.loss import l2_loss_opt
-from utils.metrics import weighted_rmse
+from utils.loss import mse_loss
+from utils.metrics import rmse
 from utils.plots import generate_images
 from networks import vit
 
@@ -59,7 +59,9 @@ def train(params, writer, local_rank, world_rank, world_size):
     )
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
 
-    loss_func = l2_loss_opt
+    loss_func = lambda pred, target: mse_loss(
+        pred, target, params.img_size
+    )
 
     if world_rank == 0:
         logging.info("Starting Training Loop...")
@@ -73,7 +75,7 @@ def train(params, writer, local_rank, world_rank, world_size):
             inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
             gen = model(inp)
             val_loss = loss_func(gen, tar)
-            val_rmse = weighted_rmse(gen, tar)
+            val_rmse = rmse(gen, tar)
         if params.distributed:
             torch.distributed.all_reduce(tr_loss)
             torch.distributed.all_reduce(val_loss)
@@ -170,7 +172,7 @@ def train(params, writer, local_rank, world_rank, world_size):
                         inp, tar = map(lambda x: x.to(device), data)
                         gen = model(inp)
                         val_loss += loss_func(gen, tar)
-                        val_rmse += weighted_rmse(gen, tar)
+                        val_rmse += rmse(gen, tar)
                     valid_steps += 1
 
                 if params.distributed:

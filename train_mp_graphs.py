@@ -21,20 +21,44 @@ logging_utils.config_logger()
 from utils.YParams import YParams
 from utils import get_data_loader_distributed
 from utils import comm
-from utils.loss import l2_loss, l2_loss_opt
-from utils.metrics import weighted_rmse
+from utils.loss import mse_loss
+from utils.metrics import rmse_spatial
+from distributed.spatial_sharding import make_vit_spatial_shard
 from networks import vit_mp
 
-from distributed.mappings import init_ddp_model_and_reduction_hooks
+from distributed.mappings import (
+    allgather_forward_split_backward,
+    init_ddp_model_and_reduction_hooks,
+)
 from distributed.helpers import init_params_for_shared_weights
 
 from utils.plots import generate_images
 
 
-def capture_model(params, model, loss_func, scaler, capture_stream, device, num_warmup=20):
+def capture_model(
+    params,
+    model,
+    loss_func,
+    scaler,
+    capture_stream,
+    device,
+    spatial_shard,
+    num_warmup=20,
+):
     logging.info("Capturing Model")
-    inp_shape = (params.local_batch_size, params.n_in_channels, params.img_size[0], params.img_size[1])
-    tar_shape = (params.local_batch_size, params.n_in_channels, params.img_size[0], params.img_size[1])
+    local_height, local_width = spatial_shard.local_shape
+    inp_shape = (
+        params.local_batch_size,
+        params.n_in_channels,
+        local_height,
+        local_width,
+    )
+    tar_shape = (
+        params.local_batch_size,
+        params.n_out_channels,
+        local_height,
+        local_width,
+    )
     
     # no zeros because loss is rel loss
     static_input = torch.randn(inp_shape, dtype=torch.float32, device=device)
@@ -80,7 +104,14 @@ def capture_model(params, model, loss_func, scaler, capture_stream, device, num_
 
     return graph, static_input, static_output, static_label, static_loss
 
-def train(params, args, local_rank, world_rank, world_size):
+def train(
+    params,
+    args,
+    local_rank,
+    world_rank,
+    world_size,
+    spatial_shard,
+):
     # set device and benchmark mode
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)
@@ -92,12 +123,24 @@ def train(params, args, local_rank, world_rank, world_size):
 
     # get data loader
     logging.info('rank %d, begin data loader init'%world_rank)
-    train_data_loader, train_dataset, train_sampler = get_data_loader_distributed(params, params.data_path, params.distributed, train=True)
-    val_data_loader, valid_dataset = get_data_loader_distributed(params, params.data_path, params.distributed, train=False)
+    train_data_loader, train_dataset, train_sampler = get_data_loader_distributed(
+        params,
+        params.data_path,
+        params.distributed,
+        train=True,
+        spatial_shard=spatial_shard,
+    )
+    val_data_loader, valid_dataset = get_data_loader_distributed(
+        params,
+        params.data_path,
+        params.distributed,
+        train=False,
+        spatial_shard=spatial_shard,
+    )
     logging.info('rank %d, data loader initialized'%(world_rank))
 
     # create model
-    model = vit_mp.ViT(params).to(device)
+    model = vit_mp.ViT(params, spatial_shard=spatial_shard).to(device)
 
     if params.enable_jit:
         model = torch.compile(model)
@@ -142,15 +185,37 @@ def train(params, args, local_rank, world_rank, world_size):
     else:
         scheduler = None
 
-    # select loss function
-    if params.enable_jit:
-        loss_func = l2_loss_opt
-    else:
-        loss_func = l2_loss
+    def loss_func(pred, target):
+        return mse_loss(pred, target, spatial_shard.global_shape)
+
+    def metric_func(pred, target):
+        return rmse_spatial(pred, target, spatial_shard)
+
+    def gather_field(field):
+        field = allgather_forward_split_backward(
+            field.detach(),
+            dim=-1,
+            shapes=spatial_shard.w_splits,
+            comm_name="sp2",
+        )
+        return allgather_forward_split_backward(
+            field,
+            dim=-2,
+            shapes=spatial_shard.h_splits,
+            comm_name="sp1",
+        )
 
     # capture the model
-    graph, static_input, static_output, static_label, static_loss = capture_model(params, model, loss_func, scaler,
-                                                                                  capture_stream, device, num_warmup=20)
+    graph, static_input, static_output, static_label, static_loss = capture_model(
+        params,
+        model,
+        loss_func,
+        scaler,
+        capture_stream,
+        device,
+        spatial_shard,
+        num_warmup=20,
+    )
 
     if world_rank==0: 
         logging.info("Starting Training Loop...")
@@ -163,7 +228,7 @@ def train(params, args, local_rank, world_rank, world_size):
         inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
         gen = model(inp)
         val_loss = loss_func(gen, tar)
-        val_rmse = weighted_rmse(gen, tar)
+        val_rmse = metric_func(gen, tar)
         if params.distributed:
             torch.distributed.all_reduce(tr_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
             torch.distributed.all_reduce(val_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
@@ -242,6 +307,10 @@ def train(params, args, local_rank, world_rank, world_size):
         torch.cuda.synchronize() # device sync to ensure accurate epoch timings
         end = time.time()
 
+        plot_fields = [
+            gather_field(field)
+            for field in (inp, tar, static_output)
+        ]
         if world_rank==0:
             iters_per_sec = step_count / (end - start)
             samples_per_sec = params["global_batch_size"] * iters_per_sec
@@ -252,7 +321,7 @@ def train(params, args, local_rank, world_rank, world_size):
             args.tboard_writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], iters)
             args.tboard_writer.add_scalar('Avg iters per sec', iters_per_sec, iters)
             args.tboard_writer.add_scalar('Avg samples per sec', samples_per_sec, iters)
-            fig = generate_images([inp, tar, gen])
+            fig = generate_images(plot_fields)
             args.tboard_writer.add_figure('Visualization, field_2', fig, iters, close=True)
 
         val_start = time.time()
@@ -268,7 +337,7 @@ def train(params, args, local_rank, world_rank, world_size):
                         inp, tar = map(lambda x: x.to(device), data)
                         gen = model(inp)
                         val_loss += loss_func(gen, tar)
-                        val_rmse += weighted_rmse(gen, tar)
+                        val_rmse += metric_func(gen, tar)
                     valid_steps += 1
 
                 if params.distributed:
@@ -443,6 +512,15 @@ if __name__ == '__main__':
     # for data loader, set the actual number of data shards and id
     params.data_num_shards = comm.get_size("dp")
     params.data_shard_id = comm.get_rank("dp")
+    spatial_shard = make_vit_spatial_shard(
+        global_shape=params.img_size,
+        patch_size=params.patch_size,
+        sp1_size=comm.get_size("sp1"),
+        sp1_rank=comm.get_rank("sp1"),
+        sp2_size=comm.get_size("sp2"),
+        sp2_rank=comm.get_rank("sp2"),
+        order=params.get("order", "tp-sp1-sp2-dp"),
+    )
 
     # Set up directory
     baseDir = params.expdir
@@ -462,7 +540,14 @@ if __name__ == '__main__':
 
     params.experiment_dir = os.path.abspath(expDir)
 
-    train(params, args, local_rank, world_rank, world_size)
+    train(
+        params,
+        args,
+        local_rank,
+        world_rank,
+        world_size,
+        spatial_shard,
+    )
 
     if params.distributed:
         torch.distributed.barrier()

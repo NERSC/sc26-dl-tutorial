@@ -1,54 +1,28 @@
-import numpy as np
 import torch
 
-
-@torch.jit.script
-def lat(j: torch.Tensor, num_lat: int) -> torch.Tensor:
-    return 90.0 - j * 180.0 / float(num_lat - 1)
+from distributed.mappings import allreduce_forward_identity_backward
 
 
 @torch.jit.script
-def latitude_weighting_factor(
-    j: torch.Tensor, num_lat: int, s: torch.Tensor
+def _squared_error_sum(
+    pred: torch.Tensor, target: torch.Tensor
 ) -> torch.Tensor:
-    return num_lat * torch.cos(3.1416 / 180.0 * lat(j, num_lat)) / s
+    return torch.sum((pred - target) ** 2, dim=(-1, -2))
 
 
 @torch.jit.script
-def weighted_rmse_channels(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    # takes in arrays of size [n, c, h, w]  and returns latitude-weighted rmse for each chann
-    num_lat = pred.shape[2]
-    # num_long = target.shape[2]
-    lat_t = torch.arange(start=0, end=num_lat, device=pred.device)
-
-    s = torch.sum(torch.cos(3.1416 / 180.0 * lat(lat_t, num_lat)))
-    weight = torch.reshape(latitude_weighting_factor(lat_t, num_lat, s), (1, 1, -1, 1))
-    result = torch.sqrt(torch.mean(weight * (pred - target) ** 2.0, dim=(-1, -2)))
-    return result
+def rmse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    squared_error_sum = _squared_error_sum(pred, target)
+    num_pixels = pred.shape[-2] * pred.shape[-1]
+    return torch.mean(torch.sqrt(squared_error_sum / num_pixels), dim=0)
 
 
-@torch.jit.script
-def weighted_rmse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    result = weighted_rmse_channels(pred, target)
-    return torch.mean(result, dim=0)
-
-
-@torch.jit.script
-def weighted_acc_channels(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    # takes in arrays of size [n, c, h, w]  and returns latitude-weighted acc
-    num_lat = pred.shape[2]
-    # num_long = target.shape[2]
-    lat_t = torch.arange(start=0, end=num_lat, device=pred.device)
-    s = torch.sum(torch.cos(3.1416 / 180.0 * lat(lat_t, num_lat)))
-    weight = torch.reshape(latitude_weighting_factor(lat_t, num_lat, s), (1, 1, -1, 1))
-    result = torch.sum(weight * pred * target, dim=(-1, -2)) / torch.sqrt(
-        torch.sum(weight * pred * pred, dim=(-1, -2))
-        * torch.sum(weight * target * target, dim=(-1, -2))
+def rmse_spatial(pred, target, spatial_shard):
+    squared_error_sum = _squared_error_sum(pred, target)
+    squared_error_sum = allreduce_forward_identity_backward(
+        squared_error_sum, "sp1-sp2"
     )
-    return result
-
-
-@torch.jit.script
-def weighted_acc(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    result = weighted_acc_channels(pred, target)
-    return torch.mean(result, dim=0)
+    num_pixels = (
+        spatial_shard.global_shape[0] * spatial_shard.global_shape[1]
+    )
+    return torch.mean(torch.sqrt(squared_error_sum / num_pixels), dim=0)

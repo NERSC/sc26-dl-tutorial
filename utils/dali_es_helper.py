@@ -20,6 +20,8 @@ class SynES:
         num_shards,
         shard_id,
         limit_nsamples,
+        spatial_shard=None,
+        spatial_read_mode="local",
         enable_logging=True,
         seed=333,
     ):
@@ -35,6 +37,12 @@ class SynES:
         self.num_shards = num_shards
         self.shard_id = shard_id
         self.limit_nsamples = limit_nsamples
+        self.spatial_shard = spatial_shard
+        self.spatial_read_mode = spatial_read_mode
+        if self.spatial_read_mode not in {"local", "all"}:
+            raise ValueError(
+                "spatial_read_mode must be 'local' or 'all'"
+            )
 
         self._get_files_stats(enable_logging)
         self.shuffle = train
@@ -83,6 +91,7 @@ class SynES:
         self.index_permutation = None
         self.inp_buf = None
         self.tar_buf = None
+        self.full_buf = None
 
     def __len__(self):
         return self.n_samples_shard
@@ -112,29 +121,78 @@ class SynES:
             self.files[file_index] = h5py.File(self.files_paths[file_index], "r")
             self.dsets[file_index] = self.files[file_index]["fields"]
 
+        if self.spatial_shard is None:
+            local_shape = (self.img_shape_x, self.img_shape_y)
+            h_slice = slice(0, self.img_shape_x)
+            w_slice = slice(0, self.img_shape_y)
+        else:
+            local_shape = self.spatial_shard.local_shape
+            h_slice, w_slice = self.spatial_shard.core_slices
+
         if self.inp_buf is None:
             self.inp_buf = np.empty(
-                (self.n_in_channels, self.img_shape_x, self.img_shape_y),
+                (self.n_in_channels, *local_shape),
                 dtype=np.float32,
             )
             self.tar_buf = np.empty(
-                (self.n_out_channels, self.img_shape_x, self.img_shape_y),
+                (self.n_out_channels, *local_shape),
                 dtype=np.float32,
             )
 
         fields = self.dsets[file_index]
-        self.inp_buf[...] = fields[
-            local_idx,
-            : self.n_in_channels,
-            : self.img_shape_x,
-            : self.img_shape_y,
-        ]
-        self.tar_buf[...] = fields[
-            local_idx + self.step,
-            : self.n_out_channels,
-            : self.img_shape_x,
-            : self.img_shape_y,
-        ]
+        if self.spatial_read_mode == "local":
+            fields.read_direct(
+                self.inp_buf,
+                source_sel=np.s_[
+                    local_idx,
+                    : self.n_in_channels,
+                    h_slice,
+                    w_slice,
+                ],
+            )
+            fields.read_direct(
+                self.tar_buf,
+                source_sel=np.s_[
+                    local_idx + self.step,
+                    : self.n_out_channels,
+                    h_slice,
+                    w_slice,
+                ],
+            )
+        else:
+            if self.full_buf is None:
+                self.full_buf = np.empty(
+                    (
+                        max(self.n_in_channels, self.n_out_channels),
+                        self.img_shape_x,
+                        self.img_shape_y,
+                    ),
+                    dtype=np.float32,
+                )
+            fields.read_direct(
+                self.full_buf[: self.n_in_channels],
+                source_sel=np.s_[
+                    local_idx,
+                    : self.n_in_channels,
+                    : self.img_shape_x,
+                    : self.img_shape_y,
+                ],
+            )
+            self.inp_buf[...] = self.full_buf[
+                : self.n_in_channels, h_slice, w_slice
+            ]
+            fields.read_direct(
+                self.full_buf[: self.n_out_channels],
+                source_sel=np.s_[
+                    local_idx + self.step,
+                    : self.n_out_channels,
+                    : self.img_shape_x,
+                    : self.img_shape_y,
+                ],
+            )
+            self.tar_buf[...] = self.full_buf[
+                : self.n_out_channels, h_slice, w_slice
+            ]
 
         # DALI consumes samples asynchronously, so each result needs independent
         # storage that will not be overwritten by the next call.

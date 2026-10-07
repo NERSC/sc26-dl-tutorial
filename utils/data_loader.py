@@ -13,8 +13,12 @@ def worker_init(_worker_id):
     np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
 
 
-def get_data_loader(params, data_path, distributed, train):
-    dataset = SynDataset(params, data_path, train)
+def get_data_loader(
+    params, data_path, distributed, train, spatial_shard=None
+):
+    dataset = SynDataset(
+        params, data_path, train, spatial_shard=spatial_shard
+    )
 
     sampler = None
     if distributed:
@@ -43,11 +47,17 @@ def get_data_loader(params, data_path, distributed, train):
 
 
 class SynDataset(Dataset):
-    def __init__(self, params, data_path, train):
+    def __init__(self, params, data_path, train, spatial_shard=None):
         self.step = int(params.dt)
         self.n_in_channels = params.n_in_channels
         self.n_out_channels = params.n_out_channels
         self.img_height, self.img_width = params.img_size
+        self.spatial_shard = spatial_shard
+        self.spatial_read_mode = params.get("spatial_read_mode", "local")
+        if self.spatial_read_mode not in {"local", "all"}:
+            raise ValueError(
+                "spatial_read_mode must be 'local' or 'all'"
+            )
         self.limit_nsamples = (
             params.limit_nsamples if train else params.limit_nsamples_val
         )
@@ -80,6 +90,7 @@ class SynDataset(Dataset):
         if self.limit_nsamples is not None:
             self.n_samples_total = min(self.n_samples_total, self.limit_nsamples)
         self.files = [None] * len(self.files_paths)
+        self.full_buf = None
         logging.info(
             "Using %d files and %d samples for %s",
             len(self.files_paths),
@@ -99,23 +110,61 @@ class SynDataset(Dataset):
         img /= self.stds
         return torch.as_tensor(img)
 
+    def _read_field(self, fields, time_index, num_channels):
+        if self.spatial_shard is None:
+            return fields[
+                time_index,
+                :num_channels,
+                : self.img_height,
+                : self.img_width,
+            ]
+
+        h_slice, w_slice = self.spatial_shard.core_slices
+        if self.spatial_read_mode == "all":
+            if self.full_buf is None:
+                self.full_buf = np.empty(
+                    (
+                        max(self.n_in_channels, self.n_out_channels),
+                        self.img_height,
+                        self.img_width,
+                    ),
+                    dtype=np.float32,
+                )
+            fields.read_direct(
+                self.full_buf[:num_channels],
+                source_sel=np.s_[
+                    time_index,
+                    :num_channels,
+                    : self.img_height,
+                    : self.img_width,
+                ],
+            )
+            return self.full_buf[:num_channels, h_slice, w_slice].copy()
+
+        output = np.empty(
+            (num_channels, *self.spatial_shard.local_shape),
+            dtype=np.float32,
+        )
+        fields.read_direct(
+            output,
+            source_sel=np.s_[
+                time_index,
+                :num_channels,
+                h_slice,
+                w_slice,
+            ],
+        )
+        return output
+
     def __getitem__(self, global_idx):
         file_index, local_idx = divmod(global_idx, self.samples_per_file)
         if self.files[file_index] is None:
             self._open_file(file_index)
         fields = self.files[file_index]
 
-        inp = fields[
-            local_idx,
-            : self.n_in_channels,
-            : self.img_height,
-            : self.img_width,
-        ]
-        tar = fields[
-            local_idx + self.step,
-            : self.n_out_channels,
-            : self.img_height,
-            : self.img_width,
-        ]
+        inp = self._read_field(fields, local_idx, self.n_in_channels)
+        tar = self._read_field(
+            fields, local_idx + self.step, self.n_out_channels
+        )
 
         return self._normalize(inp), self._normalize(tar)

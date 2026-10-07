@@ -25,6 +25,7 @@ base: &base
   # Data
   data_loader_config: 'pytorch'
   num_data_workers: 0 # number of dataloader worker threads per proc
+  spatial_read_mode: 'all' # choices: local, all
   n_in_channels: 4
   n_out_channels: 4
   data_path: '/data'

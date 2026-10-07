@@ -10,6 +10,7 @@ from utils import comm
 from networks.vit_te import VisionTransformer
 from parameterized import parameterized
 from distributed.helpers import (
+    _gather,
     compute_split_shapes,
     init_params_for_shared_weights,
 )
@@ -18,6 +19,8 @@ from distributed.mappings import (
     allgather_forward_split_backward,
     init_ddp_model_and_reduction_hooks,
 )
+from utils.loss import mse_loss
+from distributed.spatial_sharding import make_vit_spatial_shard
 
 
 class TestDistributed(unittest.TestCase):
@@ -106,7 +109,25 @@ class TestDistributed(unittest.TestCase):
         col_sharded_layers = ["fc2", "attn.proj"]  # need to gather differently
 
         if model.pos_embed.grad is not None:
-            all_grads.append(model.pos_embed.grad.view(-1))
+            pos_grad = _gather(
+                model.pos_embed.grad,
+                dim_=2,
+                shapes_=[
+                    size // model.patch_size
+                    for size in model.spatial_shard.w_splits
+                ],
+                comm_name="sp2",
+            )
+            pos_grad = _gather(
+                pos_grad,
+                dim_=1,
+                shapes_=[
+                    size // model.patch_size
+                    for size in model.spatial_shard.h_splits
+                ],
+                comm_name="sp1",
+            )
+            all_grads.append(pos_grad.view(-1))
 
         # Handle patch embed gradients (shared in both tp and sp1)
         if model.patch_embed.proj.weight.grad is not None:
@@ -193,7 +214,15 @@ class TestDistributed(unittest.TestCase):
             )
             model_distributed.patch_embed.proj.bias.copy_(model.patch_embed.proj.bias)
             # copy pos embed weights
-            model_distributed.pos_embed.copy_(model.pos_embed)
+            h_slice, w_slice = model_distributed.spatial_shard.core_slices
+            patch_size = model_distributed.patch_size
+            model_distributed.pos_embed.copy_(
+                model.pos_embed[
+                    :,
+                    h_slice.start // patch_size : h_slice.stop // patch_size,
+                    w_slice.start // patch_size : w_slice.stop // patch_size,
+                ]
+            )
             for block, block_distributed in zip(model.blocks, model_distributed.blocks):
                 self._copy_mlp_weights(block.mlp, block_distributed.mlp)
                 self._copy_attn_weights(block.attn, block_distributed.attn)
@@ -233,6 +262,9 @@ class TestDistributed(unittest.TestCase):
         comm_groups = list(comm._COMM_GROUPS.keys())
         for old_group in comm_groups:
             old_groups[old_group] = comm._COMM_GROUPS.pop(old_group, None)
+        baseline_shard = make_vit_spatial_shard(
+            (H, W), patch_size, 1, 0, 1, 0, "sp1-sp2"
+        )
         model = VisionTransformer(
             img_size=[H, W],
             patch_size=patch_size,
@@ -242,6 +274,7 @@ class TestDistributed(unittest.TestCase):
             depth=depth,
             num_heads=heads,
             qkv_bias=True,
+            spatial_shard=baseline_shard,
         ).to(self.device)
         model.zero_grad(set_to_none=True)
 
@@ -262,7 +295,7 @@ class TestDistributed(unittest.TestCase):
         # forward pass
         with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
             out = model(inp)
-            loss = torch.mean((out - tar) ** 2)
+            loss = mse_loss(out, tar, (H, W))
         loss.backward()
         non_dist_grads = self._get_flattened_grads(model)
 
@@ -276,6 +309,15 @@ class TestDistributed(unittest.TestCase):
             if group is not None:
                 comm._COMM_GROUPS[group_name] = group
 
+        spatial_shard = make_vit_spatial_shard(
+            (H, W),
+            patch_size,
+            comm.get_size("sp1"),
+            comm.get_rank("sp1"),
+            comm.get_size("sp2"),
+            comm.get_rank("sp2"),
+            "sp1-sp2-tp-dp",
+        )
         model_distributed = VisionTransformer(
             img_size=[H, W],
             patch_size=patch_size,
@@ -285,6 +327,7 @@ class TestDistributed(unittest.TestCase):
             depth=depth,
             num_heads=heads,
             qkv_bias=True,
+            spatial_shard=spatial_shard,
         ).to(self.device)
         model_distributed.zero_grad(set_to_none=True)
 
@@ -306,11 +349,14 @@ class TestDistributed(unittest.TestCase):
             tar_local = split_forward_allgather_backward(
                 tar, dim=0, shapes=None, comm_name="dp"
             )
+            h_slice, w_slice = spatial_shard.core_slices
+            inp_local = inp_local[..., h_slice, w_slice]
+            tar_local = tar_local[..., h_slice, w_slice]
         inp_local.requires_grad = True
 
         with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
             out_local = model_distributed(inp_local)
-            loss = torch.mean((out_local - tar_local) ** 2)
+            loss = mse_loss(out_local, tar_local, (H, W))
 
         loss.backward()
         inp_grad_local = inp_local.grad.clone()
@@ -320,8 +366,20 @@ class TestDistributed(unittest.TestCase):
         ############################################################
         with torch.no_grad():
             # compute error over spatial dimensions
+            out_spatial = allgather_forward_split_backward(
+                out_local,
+                dim=-1,
+                shapes=spatial_shard.w_splits,
+                comm_name="sp2",
+            )
+            out_spatial = allgather_forward_split_backward(
+                out_spatial,
+                dim=-2,
+                shapes=spatial_shard.h_splits,
+                comm_name="sp1",
+            )
             out_gather = allgather_forward_split_backward(
-                out_local, dim=0, shapes=None, comm_name="dp"
+                out_spatial, dim=0, shapes=None, comm_name="dp"
             )
             err = torch.mean(
                 torch.norm(out - out_gather, p=2, dim=(1, 2, 3))
@@ -335,8 +393,20 @@ class TestDistributed(unittest.TestCase):
         # evaluate backward pass
         #############################################################
         with torch.no_grad():
+            inp_grad_spatial = allgather_forward_split_backward(
+                inp_grad_local,
+                dim=-1,
+                shapes=spatial_shard.w_splits,
+                comm_name="sp2",
+            )
+            inp_grad_spatial = allgather_forward_split_backward(
+                inp_grad_spatial,
+                dim=-2,
+                shapes=spatial_shard.h_splits,
+                comm_name="sp1",
+            )
             inp_grad_gather = allgather_forward_split_backward(
-                inp_grad_local, dim=0, shapes=None, comm_name="dp"
+                inp_grad_spatial, dim=0, shapes=None, comm_name="dp"
             ) / comm.get_size("dp")
             err = torch.mean(
                 torch.norm(inp_grad - inp_grad_gather, p=2, dim=(1, 2, 3))
