@@ -73,7 +73,16 @@ defects in the implementation (Section 2), all fixed.
    buffers and about 6 GB outside the PyTorch allocator. The `mp` config now uses global batch 8, and the
    plan carries the correction. The same promotion exists in the ViT's row-parallel layers, but there
    the residual stream is fp32 anyway (see below), and measured memory is identical.
-7. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
+7. **High-wavenumber spectral weights stay at their random init.** On band-limited data the gradient of the
+   spectral weights falls by about 6 orders of magnitude from the lowest to the highest wavenumber band, the weights
+   at high k barely move from their random values, and Adam's default `eps=1e-8` damps the update once the
+   gradient is below it. Starting those weights smaller, `1/(1+(k/8)^2)`, improved the final validation loss in
+   all 3 seeds (4.5e-5 to 3.2e-5), so it is on by default in `config/FNO.yaml`. A per-mode preconditioner
+   (`W = D_k w`, `D_k = 1/S_k`) was tried and rejected: it made the validation loss 10x to 190x worse,
+   because it let the weights of modes without signal random-walk. Any quantity that depends on the wavenumber has
+   to use the **global** mode index in the distributed layer; this is tested, including that the test fails if the
+   local index is used.
+8. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
    mixed reduction signatures correctly (gradients equal the serial reference at `dp=2` with
    `sp1 x sp2 = 2x1, 2x2`, and with `tp=2`).
 

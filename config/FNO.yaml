@@ -8,6 +8,7 @@ base: &base
   modes_kh: 64 # retained wavenumbers in h, after truncation (None: all)
   modes_kw: 64 # retained wavenumbers in w
   mlp_ratio: 2.0 # hidden width of the channel MLP in each block, 0 disables it
+  spectral_init_k0: 8.0 # scale the initial spectral weights by 1/(1+(k/k0)^2), k in grid-index units; None disables
   model_backend: 'pytorch'
 
   # Training config

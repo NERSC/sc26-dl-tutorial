@@ -124,7 +124,7 @@ The data and training keys (`img_size`, `n_in_channels`, `global_batch_size`, `l
 | Network | Model keys |
 |---|---|
 | ViT | `embed_dim`, `depth`, `num_heads`, `patch_size`, `dropout` |
-| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers in h and w after truncation, `None` keeps all), `mlp_ratio` (width of the per-block channel MLP, `0` disables it) |
+| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers in h and w after truncation, `None` keeps all), `mlp_ratio` (width of the per-block channel MLP, `0` disables it), `spectral_init_k0` (starts the spectral weights of high wavenumbers smaller, by `1/(1+(k/k0)^2)` with `k` in grid-index units; `None` disables, see the plan) |
 
 Two things to keep in mind for the FNO:
 * It works at the full image resolution in every layer, so its activation memory scales with `embed_dim` times the number of grid points. The `mp` config therefore uses `embed_dim: 16` for the 4096 x 4096 images, the single-GPU configs use a global batch size of 1, and `mp` uses 8 on 16 GPUs (16 ran out of 40 GB). See [`networks/plans/fno/analysis.md`](networks/plans/fno/analysis.md) for the numbers.

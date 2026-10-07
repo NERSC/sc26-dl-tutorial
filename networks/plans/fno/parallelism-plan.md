@@ -123,7 +123,17 @@ Rules:
 | --- | --- | --- | --- |
 | `blocks.*.spectral.weight` | complex normal, `E\|w\|^2 = gain / C_in` | the same, `C_in` the global input channels; independent per shard | Matches |
 | pointwise weights (`lift`, `skip`, `mlp`, `project`) | PyTorch conv default: std `1/sqrt(3 * fan_in)` | normal, std `1/sqrt(3 * fan_in_global)`; `fan_in_global` is the unsharded input width (`C` for fc1, `f` for fc2) | Matches (was `trunc_normal_(std=0.02)`, a constant inherited from the ViT): `init_pointwise_` in `networks/fno.py`, applied to the ViT's tensor-parallel layers from the FNO model, with `fan_in = in_features_local * tp` for row-parallel layers |
+| spectral weights, k-dependent decay (`spectral_init_k0`) | the global grid of `spectral_wavenumbers`, times `1/(1+(k/k0)^2)` | the slice of that grid that the shard owns, from the **global** mode indices (`h0 = sum(kh_shapes[:rank_h])`, likewise `w0`), never from the local shape | Matches; `test_k_dependent_init_uses_the_global_wavenumber` compares each shard's per-mode power with the decay of its global wavenumber on uneven meshes, and fails if the local index is used |
 | pointwise biases | uniform `+-1/sqrt(fan_in)` | the same with `fan_in_global`; row-parallel and replicated biases identical across the group | Matches (was zeros) |
+
+The k-dependent decay of the spectral weights (`spectral_init_k0`, default 8 in `config/FNO.yaml`) follows
+the same rule for any index-dependent quantity: it must be a function of the *global* mode index. A distributed
+weight is a shard of the global `(kh, kw)` grid, and along h the layout is the positive frequencies first and the
+negative ones after, so the wavenumber of a local index depends on the rank's offset. Measured on the smoke
+problem (serial FNO, 3 seeds, 2400 iterations, fp32): the final validation loss was 4.5e-5 without the decay and
+3.2e-5 with `k0=8` (3.1e-5 with `k0=4`, 3.9e-5 with `k0=16`), better in all three seeds. Fields usually have little
+energy at high wavenumbers, so those weights get tiny gradients, hardly move from their random values and add noise.
+The smoke data is exactly band-limited, the extreme case, so the size of the effect on real fields is not known.
 
 Measured effect of the original distributed init, before it was fixed, at the representative width
 (`C=16`, 4 blocks, `modes=24`, one rank, 480 iterations of the smoke problem at `lr=5e-4`; one seed,
