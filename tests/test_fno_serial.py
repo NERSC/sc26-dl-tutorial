@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from parameterized import parameterized
 
-from networks.fno import FourierNeuralOperatorLayer
+from networks.fno import FourierNeuralOperator, FourierNeuralOperatorLayer
 from networks.helpers import _zero_self_conjugate_imag
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
@@ -101,6 +101,17 @@ class TestFNOSerial(unittest.TestCase):
         torch.testing.assert_close(y, layer(x), atol=1e-5, rtol=1e-5)
         y.square().sum().backward()
         self.assertTrue(torch.isfinite(layer.weight.grad).all())
+
+    def test_pointwise_init_follows_the_fan_in_rule(self):
+        """weights N(0, 1/(3 fan_in)), biases U(+-1/sqrt(fan_in)), with fan_in the layer's input channels"""
+        model = FourierNeuralOperator((16, 32), 4, 3, 64, 2, 8, 8)
+        for name, p in model.named_parameters():
+            if p.is_complex():
+                continue
+            fan_in = p.shape[1] if name.endswith(".weight") else dict(model.named_parameters())[name[:-5] + ".weight"].shape[1]
+            self.assertAlmostEqual(p.std().item() * (3 * fan_in) ** 0.5, 1.0, delta=0.2 if name.endswith(".weight") else 0.4, msg=name)
+            if name.endswith(".bias"):
+                self.assertLessEqual(p.abs().max().item(), fan_in**-0.5 + 1e-6, msg=name)
 
     def test_gradients(self):
         layer = FourierNeuralOperatorLayer(2, 2, 16, 16, 6, 5)

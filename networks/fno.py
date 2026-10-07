@@ -8,6 +8,22 @@ import torch.nn.functional as F
 from networks.helpers import _truncate_modes, _pad_modes, _zero_self_conjugate_imag
 
 
+def init_pointwise_(weight, bias, fan_in):
+    """
+    Initialize a pointwise (1x1) channel-mixing layer: weights ``N(0, 1/(3 fan_in))``, biases
+    ``U(-1/sqrt(fan_in), 1/sqrt(fan_in))``. This is the variance of PyTorch's default for
+    ``nn.Linear`` / ``nn.Conv2d`` (kaiming-uniform with a=sqrt(5)), written out so that the serial and the
+    distributed FNO use one rule, and so that the scale is computed from the *global* ``fan_in``:
+    a tensor-parallel shard only sees part of its input or output features, so a ``fan_in`` read from
+    the local weight shape would be wrong.
+    """
+    with torch.no_grad():
+        weight.normal_(0.0, 1.0 / math.sqrt(3.0 * fan_in))
+        if bias is not None:
+            bound = 1.0 / math.sqrt(fan_in)
+            bias.uniform_(-bound, bound)
+
+
 class FourierNeuralOperatorLayer(nn.Module):
     """
     Fourier neural operator layer: 2D real FFT, a complex channel-mixing weight per
@@ -139,6 +155,10 @@ class FourierNeuralOperator(nn.Module):
             ]
         )
         self.project = MLP(embed_dim, embed_dim, out_chans)
+
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):  # the 1x1 convs: lift, skip, channel MLPs, project
+                init_pointwise_(module.weight, module.bias, fan_in=module.in_channels)
 
     def forward(self, x):
         x = self.lift(x)

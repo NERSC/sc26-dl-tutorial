@@ -6,7 +6,8 @@ import torch.nn as nn
 
 from utils import comm
 from distributed.fft import DistributedRealFFT2, DistributedInverseRealFFT2
-from networks.vit_mp import MLP, _pointwise_linear
+from networks.fno import init_pointwise_
+from networks.vit_mp import MLP, ColumnParallelLinear, RowParallelLinear, _pointwise_linear
 
 
 class FourierNeuralOperatorLayer(nn.Module):
@@ -118,7 +119,7 @@ class PointwiseLinear(nn.Module):
             }
         else:
             self.register_parameter("bias", None)
-        nn.init.trunc_normal_(self.weight, std=0.02)
+        init_pointwise_(self.weight, self.bias, fan_in=in_features)
 
     def forward(self, x):
         return _pointwise_linear(x, self.weight, self.bias, "channels_first")
@@ -185,6 +186,20 @@ class FourierNeuralOperator(nn.Module):
             ]
         )
         self.project = MLP(embed_dim, embed_dim, out_chans, layout="channels_first")
+
+        # The tensor-parallel layers are the ViT's, which initialize with a constant std of 0.02. That is
+        # right at the ViT's width of ~1024 but vanishes the signal at the FNO's width, so use the same
+        # fan-in scaled rule as the serial FNO, with the *global* fan-in: a column-parallel weight is
+        # sharded over its outputs (the local input width is the global one), a row-parallel one over its
+        # inputs. Replicated parameters (the row-parallel bias, the sp-replicated layers) are drawn
+        # independently on every rank here and synchronized from the group root by
+        # init_params_for_shared_weights, as for every other replicated parameter.
+        tp = comm.get_size("tp")
+        for module in self.modules():
+            if isinstance(module, ColumnParallelLinear):
+                init_pointwise_(module.weight, module.bias, fan_in=module.weight.shape[1])
+            elif isinstance(module, RowParallelLinear):
+                init_pointwise_(module.weight, module.bias, fan_in=module.in_features_local * tp)
 
     def forward(self, x):
         x = self.lift(x)

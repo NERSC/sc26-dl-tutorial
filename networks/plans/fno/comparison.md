@@ -14,7 +14,7 @@ memory/communication estimates, the scale plan and the cost model**, because the
 op (the pencil FFT) that changes layout and size inside a single logical op, it is
 dominated by activations at full resolution, and it has complex parameters. Section 3 lists
 eleven extensions. The implementation follows the plan; applying the plan also exposed three
-defects in the implementation (Section 2): two fixed, and one open (initialization).
+defects in the implementation (Section 2), all fixed.
 
 ## 1. Plan versus implementation
 
@@ -30,7 +30,7 @@ defects in the implementation (Section 2): two fixed, and one open (initializati
 | General DDP hook (mixed reduction signatures) | `init_ddp_model_and_reduction_hooks`, unchanged | Matches; verified with complex parameters and `dp=2` on gloo (`tests/test_fno_ddp.py`) |
 | Non-fused optimizer (fused Adam rejects complex weights) | Trainers hard-coded `fused=True` | **Differed, fixed**: `train.py` and `train_mp.py` now use `fused=False` if any parameter is complex |
 | Divisibility: `H, W, kh, kw, C_in, C_out >= sp` | Only the channel count was checked, in the model; mode counts and spatial sizes failed at the first forward with a transposition error | **Differed, fixed**: checks at construction, in `distributed/fft.py` and `fno_mp.py` (`tests/test_fno.py::test_group_size_validation`) |
-| Initialization statistically equivalent to the serial model, from global sizes | Spectral weights match. Pointwise weights use the ViT layers' constant `trunc_normal_(std=0.02)` and zero biases; the serial model uses PyTorch's conv default (fan-in scaled weights, random biases) | **Differs, not fixed**: at width 16 the signal vanishes at init (output std 0.0000, gradients 1e-13..1e-16) and loss after 480 iterations is 0.596 versus 0.014 for the serial model; see the Initialization Handoff in the plan |
+| Initialization statistically equivalent to the serial model, from global sizes | Spectral weights match. Pointwise weights use the ViT layers' constant `trunc_normal_(std=0.02)` and zero biases; the serial model uses PyTorch's conv default (fan-in scaled weights, random biases) | **Differs, fixed**: at width 16 the signal vanished at init (output std 0.0000, gradients 1e-13..1e-16) and the loss after 480 iterations was 0.596 versus 0.014 for the serial model. Now one rule, `init_pointwise_`, from global sizes in both models; `tests/test_fno_init.py`; `train_mp.py` trains (validation MSE 1.015 to 0.00025 in 960 iterations on the smoke problem) |
 | Representative `embed_dim` | `config/FNO.yaml` `mp` carried 128 (2.27 TB of activations) | **Differed, fixed**: set to 16 |
 | Activation checkpointing for the 4- and 8-GPU rows | Not implemented | Gap (the plan marks those rows infeasible) |
 | `fullgraph` compile | Serial compiles; distributed cannot (collectives are `@torch.compiler.disable`) | Known limit, not in the ViT plan's vocabulary |
@@ -51,8 +51,10 @@ defects in the implementation (Section 2): two fixed, and one open (initializati
    pointwise layers are reused from the ViT with their constant `std=0.02` and zero biases,
    while the serial FNO uses PyTorch's conv default. At `C=16` this vanishes the signal and
    slows training by more than an order of magnitude. The equivalence tests did not catch it
-   because they copy the serial weights into the shards. Not fixed yet; the plan now requires
-   it (Initialization Handoff), with the measurements.
+   because they copy the serial weights into the shards. Fixed: both models use `init_pointwise_` (std
+   `1/sqrt(3 fan_in)`, biases `U(+-1/sqrt(fan_in))`) with the global fan-in, and
+   `tests/test_fno_init.py` guards it, including the tensor-parallel cases where a local shape would
+   give a wrong fan-in. The plan requires it (Initialization Handoff), with the measurements.
 5. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
    mixed reduction signatures correctly (gradients equal the serial reference at `dp=2` with
    `sp1 x sp2 = 2x1, 2x2`, and with `tp=2`).
@@ -139,11 +141,13 @@ cost for models with more channels, which motivates the sharded-loss alternative
   `mse_loss` and `rmse_spatial` on the shards equal the full ones with the same gradients at `sp1 x sp2` = 2x2, 4x1, 1x4 and with `tp=2`, and
   the model tests use shards in and out. `train_mp.py` ran end to end on one GPU with one rank
   for the FNO and the ViT (with stubs for TensorBoard, `pynvml` and `transformer_engine`, which are
-  not installed here). The FNO loss stays at exactly 1.0 until the initialization is fixed (see
-  above); with a serial-equivalent init patched in from outside, the validation MSE went from 1.03
-  to 0.00029 in 960 iterations, so the sharded pipeline itself trains.
-- **Verified, one rank:** the initialization comparison (five variants, one seed, 480
-  iterations); it is indicative only and was not run on a mesh.
+  not installed here). The FNO trains through it: the validation MSE went from 1.015 to 0.00025 in
+  960 iterations on the smoke problem (before the init fix it stayed at exactly 1.0).
+- **Verified, initialization:** `tests/test_fno_init.py` at `tp x sp1 x sp2` up to 2x2x2 (statistics,
+  synchronization of replicated parameters, signal and gradient scale against the serial model over
+  15 draws), and it fails with the old `std=0.02`. The five-variant comparison that found the problem
+  is one seed and 480 iterations, indicative only. Whether this scale is *critical* for signal
+  propagation (the literature on FNO initialization) is not studied here.
 - **Not verified:** a multi-rank `train_mp.py` run (one GPU here, and `comm.init` uses NCCL), the DALI pipeline itself,
   NCCL and multi-GPU runs (the `dist.all_to_all` path), peak memory,
   communication time, throughput, an end-to-end training step with the data loader, and every

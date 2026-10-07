@@ -122,11 +122,12 @@ Rules:
 | Parameter pattern | Serial init | Distributed rule (global sizes) | Current distributed implementation |
 | --- | --- | --- | --- |
 | `blocks.*.spectral.weight` | complex normal, `E\|w\|^2 = gain / C_in` | the same, `C_in` the global input channels; independent per shard | Matches |
-| pointwise weights (`lift`, `skip`, `mlp`, `project`) | PyTorch conv default: std `1/sqrt(3 * fan_in)` | normal, std `1/sqrt(3 * fan_in_global)`; `fan_in_global` is the unsharded input width (`C` for fc1, `f` for fc2) | **Differs**: `trunc_normal_(std=0.02)`, a constant inherited from the ViT |
-| pointwise biases | uniform `+-1/sqrt(fan_in)` | the same with `fan_in_global`; row-parallel and replicated biases identical across the group | **Differs**: zeros |
+| pointwise weights (`lift`, `skip`, `mlp`, `project`) | PyTorch conv default: std `1/sqrt(3 * fan_in)` | normal, std `1/sqrt(3 * fan_in_global)`; `fan_in_global` is the unsharded input width (`C` for fc1, `f` for fc2) | Matches (was `trunc_normal_(std=0.02)`, a constant inherited from the ViT): `init_pointwise_` in `networks/fno.py`, applied to the ViT's tensor-parallel layers from the FNO model, with `fan_in = in_features_local * tp` for row-parallel layers |
+| pointwise biases | uniform `+-1/sqrt(fan_in)` | the same with `fan_in_global`; row-parallel and replicated biases identical across the group | Matches (was zeros) |
 
-Measured effect at the representative width (`C=16`, 4 blocks, `modes=24`, one rank, 480
-iterations of the smoke problem at `lr=5e-4`; one seed, so indicative only):
+Measured effect of the original distributed init, before it was fixed, at the representative width
+(`C=16`, 4 blocks, `modes=24`, one rank, 480 iterations of the smoke problem at `lr=5e-4`; one seed,
+so indicative only):
 
 | Variant | Output std at init | Train loss at 120 / 240 / 360 / 480 |
 | --- | ---: | --- |
@@ -238,7 +239,7 @@ Risks:
 - A missing SP1-SP2 reduction on a pointwise weight silently produces wrong training; the
   spectral weights are the opposite case, a spurious reduction would double count.
 - Fused Adam rejects the complex spectral weights; the optimizer must be non-fused.
-- Initialization constants inherited from another model's layers (the ViT's `0.02`) vanish the signal at small width; see Initialization Handoff.
+- Initialization constants inherited from another model's layers (the ViT's `0.02`) vanish the signal at small width; fixed, and guarded by `tests/test_fno_init.py`; see Initialization Handoff.
 - Large FP32 FFT workspaces and the FP32 spectral island may push the peak above the
   estimate.
 - The distributed model cannot be compiled with `fullgraph=True` because the collectives are
@@ -263,7 +264,7 @@ Risks:
 5. Measure peak allocated/reserved CUDA memory and NVML high-water marks, including cuFFT workspaces.
 6. Benchmark samples/second against pure DP; do not claim a throughput improvement without measurement.
 7. Check the sharded interface: the loader shards of all spatial ranks tile the image and equal the full loader's slices (both loaders), `mse_loss` and `rmse_spatial` on the shards equal the plain MSE and RMSE of the full fields, and the gradient with respect to each shard equals the corresponding slice of the full gradient, on every mesh in the scale plan.
-8. Check initialization equivalence, separately from the weight-copying checks above: build the serial and distributed models, compare the per-parameter weight and bias statistics (gathered over the shards) and the per-layer activation and gradient scale at initialization, on every mesh in the scale plan, and compare the loss curves over a few hundred iterations on a small problem. Statistical agreement, not bitwise.
+8. Check initialization equivalence, separately from the weight-copying checks above: build the serial and distributed models, compare the per-parameter weight and bias statistics (gathered over the shards) and the per-layer activation and gradient scale at initialization, on every mesh in the scale plan, and compare the loss curves over a few hundred iterations on a small problem. Statistical agreement, not bitwise. `tests/test_fno_init.py` does this: per-parameter statistics within about 5 sigma of the sampling error of their size (so tiny parameters are only bounds), replicated parameters identical over their `shared` groups, and, over 15 draws each, the median output std and `lift.fc1` gradient norm of the distributed model within a factor of 2 of the serial one. Single networks cannot be compared: at this depth the output std of one draw varies by more than 10x between seeds, in both models.
 
 ## Alternatives Considered
 
