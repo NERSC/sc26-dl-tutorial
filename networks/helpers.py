@@ -96,3 +96,56 @@ def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0):  # pragma: no cover
     b: the maximum cutoff value
     """
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
+
+
+# FFT mode helpers shared by the serial and distributed Fourier layers
+def _truncate_modes(x, nmodes, dim):
+    """Keep the lowest nmodes/2 positive and negative frequencies along a full FFT dim."""
+    n = x.shape[dim]
+    if nmodes >= n:
+        return x
+    high = math.ceil(nmodes / 2)
+    low = math.floor(nmodes / 2)
+    parts = [x.narrow(dim, 0, high)]
+    if low > 0:
+        parts.append(x.narrow(dim, n - low, low))
+    return torch.cat(parts, dim=dim)
+
+
+def _pad_modes(x, nmodes, n, dim):
+    """Inverse of _truncate_modes: zero-fill the middle so dim has size n."""
+    if nmodes >= n:
+        return x
+    high = math.ceil(nmodes / 2)
+    low = math.floor(nmodes / 2)
+    xh = x.narrow(dim, 0, high)
+    zeros_shape = list(x.shape)
+    zeros_shape[dim] = n - nmodes
+    parts = [xh, x.new_zeros(zeros_shape)]
+    if low > 0:
+        parts.append(x.narrow(dim, nmodes - low, low))
+    return torch.cat(parts, dim=dim)
+
+
+def _zero_self_conjugate_imag(x, n, dim=-1):
+    """
+    Zero the imaginary part of the self-conjugate bins (DC and, for even n, Nyquist) of a
+    spectrum along ``dim``, i.e. right before the inverse real FFT of length ``n`` along it.
+
+    A c2r transform is only defined for these bins being real. CPU pocketfft discards the
+    imaginary part, but backends may not (cuFFT has not been dependable in the past), so we
+    never leave it to them. This mirrors ``torch_harmonics.fft.irfft``. The scale is applied
+    functionally via ``torch.complex``: in-place writes through a strided complex view break
+    autograd on CPU+MKL, and this form also traces with ``fullgraph=True``.
+
+    Along h-space / w-frequency tensors (our case) this is the Hermitian projection that
+    ``irfft2`` applies on CPU, as the imaginary part of the whole column is dropped.
+    """
+    size = x.size(dim)
+    scale = torch.ones(size, dtype=x.real.dtype, device=x.device)
+    scale[0] = 0.0
+    if (n % 2 == 0) and (n // 2 < size):
+        scale[n // 2] = 0.0
+    shape = [1] * x.ndim
+    shape[dim] = -1
+    return torch.complex(x.real, x.imag * scale.reshape(*shape))
