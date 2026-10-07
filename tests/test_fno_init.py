@@ -5,7 +5,8 @@ import torch.distributed as dist
 
 from utils import comm
 from tests.helpers import DistributedTestCase
-from distributed.helpers import init_params_for_shared_weights
+from distributed.helpers import compute_split_shapes, init_params_for_shared_weights
+from networks.helpers import spectral_init_decay, spectral_wavenumbers
 from networks.fno import FourierNeuralOperator as SerialFNO
 from networks.fno_mp import FourierNeuralOperator as DistributedFNO
 
@@ -74,3 +75,26 @@ class TestFNOInit(DistributedTestCase):
             s = sorted(v[i] for v in serial)[len(serial) // 2]
             d = sorted(v[i] for v in distributed)[len(distributed) // 2]
             self.assertTrue(0.5 < d / s < 2.0, f"median {what}: distributed {d:.3e} vs serial {s:.3e}")
+
+    def test_k_dependent_init_uses_the_global_wavenumber(self):
+        """Every shard of the spectral weight carries the decay of the *global* wavenumber of its modes, on uneven
+        meshes. With the local index instead, every rank but the first would get the wrong decay."""
+        cfg = {**CFG, "spectral_init_k0": 8.0}
+        model = DistributedFNO(**cfg).to(self.device)
+        mh, mw = cfg["modes_kh"], cfg["modes_kw"]
+        # this rank's modes, from the mesh coordinates, independently of the layer's own bookkeeping
+        kh_shapes = compute_split_shapes(mh, comm.get_size("sp1"))
+        kw_shapes = compute_split_shapes(mw, comm.get_size("sp2"))
+        h0, w0 = sum(kh_shapes[: comm.get_rank("sp1")]), sum(kw_shapes[: comm.get_rank("sp2")])
+        k = spectral_wavenumbers(mh, mw)[h0 : h0 + kh_shapes[comm.get_rank("sp1")], w0 : w0 + kw_shapes[comm.get_rank("sp2")]]
+        expected = spectral_init_decay(k, 8.0).pow(2).to(self.device) / cfg["embed_dim"]
+
+        for block in model.blocks:
+            w = block.spectral.weight.detach()
+            self.assertEqual(tuple(w.shape[2:]), tuple(expected.shape))
+            power = w.abs().pow(2).mean(dim=(0, 1))  # per mode, over the C x C weights
+            ratio = power / expected
+            self.assertTrue(
+                ((ratio > 0.85) & (ratio < 1.15)).all(),
+                f"rank offsets ({h0},{w0}): per-mode power vs decay(k_global)^2/C off by {ratio.min():.2f}..{ratio.max():.2f}",
+            )

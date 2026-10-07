@@ -5,7 +5,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from networks.helpers import _truncate_modes, _pad_modes, _zero_self_conjugate_imag
+from networks.helpers import (
+    _truncate_modes,
+    _pad_modes,
+    _zero_self_conjugate_imag,
+    spectral_init_decay,
+    spectral_wavenumbers,
+)
 
 
 def init_pointwise_(weight, bias, fan_in):
@@ -38,6 +44,10 @@ class FourierNeuralOperatorLayer(nn.Module):
     Along h the retained modes are the lowest positive and negative frequencies; along w they
     are the lowest non-negative ones.
 
+    ``init_k0`` (default: off) scales the initial weights by ``1/(1+(k/init_k0)^2)`` with the radial wavenumber ``k`` of
+    each mode. Fields usually have little energy at high wavenumbers, so those weights get tiny gradients, hardly move
+    from their random initial values, and then add noise: starting them small keeps that noise down.
+
     The inverse transform is an ifft along h followed by a real ifft along w. Before the latter,
     the imaginary parts of the self-conjugate w columns (DC and Nyquist) are explicitly zeroed,
     since a c2r transform is only defined for them being real. This matches ``irfft2`` on CPU.
@@ -52,6 +62,7 @@ class FourierNeuralOperatorLayer(nn.Module):
         modes_kh: Optional[int] = None,
         modes_kw: Optional[int] = None,
         gain: float = 1.0,
+        init_k0: Optional[float] = None,
     ):
         super().__init__()
 
@@ -70,6 +81,8 @@ class FourierNeuralOperatorLayer(nn.Module):
             self.modes_kw,
             dtype=torch.complex64,
         )
+        if init_k0 is not None:
+            init = init * spectral_init_decay(spectral_wavenumbers(self.modes_kh, self.modes_kw), init_k0)
         self.weight = nn.Parameter(init)
 
     # The spectral layer runs eagerly even under torch.compile. Inductor lowers the FFTs to fallback kernels
@@ -118,9 +131,9 @@ class Block(nn.Module):
     The pointwise skip path carries the modes that the spectral layer truncates.
     """
 
-    def __init__(self, dim, height, width, modes_kh=None, modes_kw=None, mlp_ratio=2.0, act_layer=nn.GELU):
+    def __init__(self, dim, height, width, modes_kh=None, modes_kw=None, mlp_ratio=2.0, act_layer=nn.GELU, init_k0=None):
         super().__init__()
-        self.spectral = FourierNeuralOperatorLayer(dim, dim, height, width, modes_kh, modes_kw)
+        self.spectral = FourierNeuralOperatorLayer(dim, dim, height, width, modes_kh, modes_kw, init_k0=init_k0)
         self.skip = nn.Conv2d(dim, dim, 1)
         self.act = act_layer()
         self.mlp = MLP(dim, int(dim * mlp_ratio), dim, act_layer=act_layer) if mlp_ratio > 0 else None
@@ -149,6 +162,7 @@ class FourierNeuralOperator(nn.Module):
         modes_kh=None,
         modes_kw=None,
         mlp_ratio=2.0,
+        spectral_init_k0=None,
         **kwargs,
     ):
         super().__init__()
@@ -156,7 +170,7 @@ class FourierNeuralOperator(nn.Module):
         self.lift = MLP(in_chans, embed_dim, embed_dim)
         self.blocks = nn.ModuleList(
             [
-                Block(embed_dim, *self.img_size, modes_kh=modes_kh, modes_kw=modes_kw, mlp_ratio=mlp_ratio)
+                Block(embed_dim, *self.img_size, modes_kh=modes_kh, modes_kw=modes_kw, mlp_ratio=mlp_ratio, init_k0=spectral_init_k0)
                 for _ in range(depth)
             ]
         )
@@ -183,5 +197,6 @@ def FNO(params, **kwargs):
         modes_kh=params.get("modes_kh", None),
         modes_kw=params.get("modes_kw", None),
         mlp_ratio=params.get("mlp_ratio", 2.0),
+        spectral_init_k0=params.get("spectral_init_k0", None),
         **kwargs,
     )

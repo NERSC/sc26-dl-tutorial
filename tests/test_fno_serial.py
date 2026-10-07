@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from parameterized import parameterized
 
 from networks.fno import FourierNeuralOperator, FourierNeuralOperatorLayer
-from networks.helpers import _zero_self_conjugate_imag
+from networks.helpers import _truncate_modes, _zero_self_conjugate_imag, spectral_init_decay, spectral_wavenumbers
 
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
@@ -124,6 +124,44 @@ class TestFNOSerial(unittest.TestCase):
             self.assertAlmostEqual(p.std().item() * (3 * fan_in) ** 0.5, 1.0, delta=0.2 if name.endswith(".weight") else 0.4, msg=name)
             if name.endswith(".bias"):
                 self.assertLessEqual(p.abs().max().item(), fan_in**-0.5 + 1e-6, msg=name)
+
+    @parameterized.expand([[5, 7], [6, 4], [12, 9], [1, 3]])
+    def test_spectral_wavenumbers_follow_the_layout(self, mh, mw):
+        """The wavenumber grid matches what the layer really produces: transform a plane wave of known frequency,
+        keep the modes the way the layer does, and the index that lights up must carry that wavenumber."""
+        height, width = 32, 40
+        k = spectral_wavenumbers(mh, mw)
+        self.assertEqual(tuple(k.shape), (mh, mw))
+        yy, xx = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+        for fh in range(0, min(mh, height) // 2 + 1):
+            for fw in range(0, mw):
+                wave = torch.cos(2 * torch.pi * (fh * yy / height + fw * xx / width))
+                full = torch.fft.rfft2(wave[None, None], norm="ortho")
+                spec = _truncate_modes(full.narrow(-1, 0, mw), mh, dim=-2)[0, 0]
+                # threshold relative to the untruncated spectrum, so a truncated line leaves nothing lit
+                lit = (spec.abs() > 1e-3 * full.abs().max()).nonzero()
+                if len(lit) == 0:
+                    continue  # the line was truncated away (e.g. +kh of an even count keeps only -kh)
+                expected = (fh**2 + fw**2) ** 0.5
+                for i, j in lit.tolist():
+                    self.assertAlmostEqual(k[i, j].item(), expected, places=4, msg=f"modes ({mh},{mw}) wave ({fh},{fw}) lit ({i},{j})")
+
+    def test_spectral_wavenumbers_ranges_are_slices_of_the_global_grid(self):
+        full = spectral_wavenumbers(12, 9)
+        for (h0, h1), (w0, w1) in [((0, 3), (0, 3)), ((3, 6), (2, 5)), ((6, 12), (5, 9)), ((11, 12), (8, 9))]:
+            torch.testing.assert_close(spectral_wavenumbers(12, 9, (h0, h1), (w0, w1)), full[h0:h1, w0:w1])
+
+    def test_init_decay_follows_k0(self):
+        """per-mode power of the initial weights is decay(k)^2 / C_in, and off by default"""
+        torch.manual_seed(7)
+        c = 64
+        for k0 in (None, 8.0):
+            layer = FourierNeuralOperatorLayer(c, c, 64, 128, 24, 20, init_k0=k0)
+            power = layer.weight.detach().abs().pow(2).mean(dim=(0, 1))  # per mode, over the 64 x 64 weights
+            k = spectral_wavenumbers(layer.modes_kh, layer.modes_kw)
+            expected = (1.0 if k0 is None else spectral_init_decay(k, k0) ** 2) / c
+            ratio = power / expected
+            self.assertTrue(((ratio > 0.9) & (ratio < 1.1)).all(), f"k0={k0}: per-mode power off by {ratio.min():.2f}..{ratio.max():.2f}")
 
     def test_gradients(self):
         layer = FourierNeuralOperatorLayer(2, 2, 16, 16, 6, 5)

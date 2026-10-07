@@ -149,3 +149,27 @@ def _zero_self_conjugate_imag(x, n, dim=-1):
     shape = [1] * x.ndim
     shape[dim] = -1
     return torch.complex(x.real, x.imag * scale.reshape(*shape))
+
+
+def spectral_wavenumbers(modes_kh, modes_kw, h_range=None, w_range=None):
+    """
+    Radial wavenumber ``|k| = sqrt(kh^2 + kw^2)``, in grid-index units, of the retained spectral modes, in the
+    layout the spectral layers use: along h the positive frequencies first and then the negative ones (the layout
+    of ``_truncate_modes``), along w the non-negative ones (``rfft``).
+
+    ``h_range`` and ``w_range`` are ``(start, stop)`` ranges of **global** mode indices, so a shard of a
+    distributed weight passes the range it owns and gets exactly the slice of the global grid. Reading the indices
+    off the local weight shape instead would put the wrong wavenumber on every rank but the first.
+    """
+    h0, h1 = h_range if h_range is not None else (0, modes_kh)
+    w0, w1 = w_range if w_range is not None else (0, modes_kw)
+    ih = torch.arange(h0, h1)
+    kh = torch.minimum(ih, modes_kh - ih).float()
+    kw = torch.arange(w0, w1).float()
+    return (kh[:, None] ** 2 + kw[None, :] ** 2).sqrt()
+
+
+def spectral_init_decay(k, k0):
+    """Factor ``1 / (1 + (k/k0)^2)`` on the initial spectral weights, so that the modes with little signal
+    start small (``k0`` is the wavenumber at which the weights have dropped to one half)."""
+    return 1.0 / (1.0 + (k / k0) ** 2)

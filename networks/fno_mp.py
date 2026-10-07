@@ -7,6 +7,7 @@ import torch.nn as nn
 from utils import comm
 from distributed.fft import DistributedRealFFT2, DistributedInverseRealFFT2
 from networks.fno import init_pointwise_
+from networks.helpers import spectral_init_decay, spectral_wavenumbers
 from networks.vit_mp import MLP, ColumnParallelLinear, RowParallelLinear, _pointwise_linear
 
 
@@ -39,6 +40,7 @@ class FourierNeuralOperatorLayer(nn.Module):
         h_comm: str = "sp1",
         w_comm: str = "sp2",
         gain: float = 1.0,
+        init_k0: Optional[float] = None,
     ):
         super().__init__()
 
@@ -77,6 +79,19 @@ class FourierNeuralOperatorLayer(nn.Module):
             self.modes_kw_local,
             dtype=torch.complex64,
         )
+        if init_k0 is not None:
+            # This rank owns the modes [h0, h0 + kh_local) x [w0, w0 + kw_local) of the global grid. The wavenumber
+            # of each is a function of its *global* index, so the shard takes its slice of the global k grid; the
+            # local index would put the wrong decay on every rank but the first.
+            h0 = sum(self.forward_transform.kh_shapes[: comm.get_rank(h_comm)])
+            w0 = sum(self.forward_transform.kw_shapes[: comm.get_rank(w_comm)])
+            k = spectral_wavenumbers(
+                self.modes_kh,
+                self.modes_kw,
+                h_range=(h0, h0 + self.modes_kh_local),
+                w_range=(w0, w0 + self.modes_kw_local),
+            )
+            init = init * spectral_init_decay(k, init_k0)
         self.weight = nn.Parameter(init)
         self.weight.comm_metadata = {
             "sharded": [None, None, h_comm, w_comm],
@@ -138,9 +153,9 @@ class Block(nn.Module):
     channels-first mode, and is tensor-parallel over tp.
     """
 
-    def __init__(self, dim, height, width, modes_kh=None, modes_kw=None, mlp_ratio=2.0, act_layer=nn.GELU):
+    def __init__(self, dim, height, width, modes_kh=None, modes_kw=None, mlp_ratio=2.0, act_layer=nn.GELU, init_k0=None):
         super().__init__()
-        self.spectral = FourierNeuralOperatorLayer(dim, dim, height, width, modes_kh, modes_kw)
+        self.spectral = FourierNeuralOperatorLayer(dim, dim, height, width, modes_kh, modes_kw, init_k0=init_k0)
         self.skip = PointwiseLinear(dim, dim)
         self.act = act_layer()
         self.mlp = (
@@ -178,6 +193,7 @@ class FourierNeuralOperator(nn.Module):
         modes_kh=None,
         modes_kw=None,
         mlp_ratio=2.0,
+        spectral_init_k0=None,
         **kwargs,
     ):
         super().__init__()
@@ -187,7 +203,7 @@ class FourierNeuralOperator(nn.Module):
         self.lift = MLP(in_chans, embed_dim, embed_dim, layout="channels_first")
         self.blocks = nn.ModuleList(
             [
-                Block(embed_dim, height, width, modes_kh=modes_kh, modes_kw=modes_kw, mlp_ratio=mlp_ratio)
+                Block(embed_dim, height, width, modes_kh=modes_kh, modes_kw=modes_kw, mlp_ratio=mlp_ratio, init_k0=spectral_init_k0)
                 for _ in range(depth)
             ]
         )
@@ -224,5 +240,6 @@ def FNO(params, **kwargs):
         modes_kh=params.get("modes_kh", None),
         modes_kw=params.get("modes_kw", None),
         mlp_ratio=params.get("mlp_ratio", 2.0),
+        spectral_init_k0=params.get("spectral_init_k0", None),
         **kwargs,
     )
