@@ -91,6 +91,7 @@ class SynES:
         self.index_permutation = None
         self.inp_buf = None
         self.tar_buf = None
+        self.full_buf = None
 
     def __len__(self):
         return self.n_samples_shard
@@ -159,18 +160,39 @@ class SynES:
                 ],
             )
         else:
-            self.inp_buf[...] = fields[
-                local_idx,
-                : self.n_in_channels,
-                : self.img_shape_x,
-                : self.img_shape_y,
-            ][:, h_slice, w_slice]
-            self.tar_buf[...] = fields[
-                local_idx + self.step,
-                : self.n_out_channels,
-                : self.img_shape_x,
-                : self.img_shape_y,
-            ][:, h_slice, w_slice]
+            if self.full_buf is None:
+                self.full_buf = np.empty(
+                    (
+                        max(self.n_in_channels, self.n_out_channels),
+                        self.img_shape_x,
+                        self.img_shape_y,
+                    ),
+                    dtype=np.float32,
+                )
+            fields.read_direct(
+                self.full_buf[: self.n_in_channels],
+                source_sel=np.s_[
+                    local_idx,
+                    : self.n_in_channels,
+                    : self.img_shape_x,
+                    : self.img_shape_y,
+                ],
+            )
+            self.inp_buf[...] = self.full_buf[
+                : self.n_in_channels, h_slice, w_slice
+            ]
+            fields.read_direct(
+                self.full_buf[: self.n_out_channels],
+                source_sel=np.s_[
+                    local_idx + self.step,
+                    : self.n_out_channels,
+                    : self.img_shape_x,
+                    : self.img_shape_y,
+                ],
+            )
+            self.tar_buf[...] = self.full_buf[
+                : self.n_out_channels, h_slice, w_slice
+            ]
 
         # DALI consumes samples asynchronously, so each result needs independent
         # storage that will not be overwritten by the next call.

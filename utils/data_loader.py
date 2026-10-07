@@ -90,6 +90,7 @@ class SynDataset(Dataset):
         if self.limit_nsamples is not None:
             self.n_samples_total = min(self.n_samples_total, self.limit_nsamples)
         self.files = [None] * len(self.files_paths)
+        self.full_buf = None
         logging.info(
             "Using %d files and %d samples for %s",
             len(self.files_paths),
@@ -120,13 +121,25 @@ class SynDataset(Dataset):
 
         h_slice, w_slice = self.spatial_shard.core_slices
         if self.spatial_read_mode == "all":
-            full = fields[
-                time_index,
-                :num_channels,
-                : self.img_height,
-                : self.img_width,
-            ]
-            return full[:, h_slice, w_slice]
+            if self.full_buf is None:
+                self.full_buf = np.empty(
+                    (
+                        max(self.n_in_channels, self.n_out_channels),
+                        self.img_height,
+                        self.img_width,
+                    ),
+                    dtype=np.float32,
+                )
+            fields.read_direct(
+                self.full_buf[:num_channels],
+                source_sel=np.s_[
+                    time_index,
+                    :num_channels,
+                    : self.img_height,
+                    : self.img_width,
+                ],
+            )
+            return self.full_buf[:num_channels, h_slice, w_slice].copy()
 
         output = np.empty(
             (num_channels, *self.spatial_shard.local_shape),
