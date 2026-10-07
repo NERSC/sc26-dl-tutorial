@@ -148,8 +148,13 @@ sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config my_fno
 To start a new file, copy an existing one: it needs the same data, training and communication keys, plus the model keys of the network you want.
 
 Notes:
-* The only command-line options are `--yaml_config`, `--config` and `--run_num` (plus `--tp`, `--sp1`, `--sp2` and `--order` for `train_mp.py`). Every other setting is changed in the YAML file.
+* The command-line options are `--yaml_config`, `--config`, `--run_num` and `--expdir` (plus `--tp`, `--sp1`, `--sp2` and `--order` for `train_mp.py`). Every other setting is changed in the YAML file.
 * Results are written to `<expdir>/<config>/<N>GPU/<run_num>`, and only the config *name* is part of the path. The two files both have configs named `base` and `mp`, so give runs from different files different `--run_num`s (as in `--run_num=fno_sp2x2` above), otherwise they write to the same directory.
+* **Choosing where output goes.** Two paths are involved. The submission scripts mount a host directory as `/logs` in the container, by default `$SCRATCH/sc25-dl-tutorial/logs`, and the data directory as `/data`. Set `LOGDIR` (and `DATADIR`) in the environment to use other host directories, for example after a quota error on scratch:
+  ```
+  LOGDIR=$PSCRATCH/fno_logs sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config short
+  ```
+  The `expdir` of the config (`/logs` by default) is a path *inside* the container, so it has to lie below a mounted directory. `--expdir /logs/runs_a` writes to `runs_a` inside `LOGDIR`, and `--expdir` overrides `expdir` of the config for a single run.
 
 ## Single GPU training
 

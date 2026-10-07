@@ -326,11 +326,20 @@ if __name__ == "__main__":
         help="Order of ranks for parallelism",
     )
 
+    parser.add_argument(
+        "--expdir",
+        default=None,
+        type=str,
+        help="output directory for logs and TensorBoard files, overrides expdir of the config. "
+        "Inside the container, so it has to be below a mounted path such as /logs",
+    )
     args = parser.parse_args()
 
     run_num = args.run_num
 
     params = YParams(os.path.abspath(args.yaml_config), args.config)
+    if args.expdir is not None:
+        params.expdir = args.expdir
 
     params.distributed = False
 
