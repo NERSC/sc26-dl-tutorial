@@ -63,7 +63,17 @@ defects in the implementation (Section 2), all fixed.
    on which FFT op or torch version is at fault. Not reproduced locally (torch 2.13 compiles at
    4096^2), so the fix is verified here only by the graph-contents test, and by the trainers running
    with `enable_jit: true`, not on the cluster's torch.
-6. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
+6. **Out of memory at 16 GPUs, from an fp32 residual stream and an optimistic estimate.** The first
+   `mp` job (`dp=1, sp=4x4`, global batch 16) failed in the training forward with 38.5 GB in use.
+   A single-rank probe at the per-GPU tile found the cause of part of it: the row-parallel bias
+   (`x + bias`, a bf16 activation plus an fp32 parameter) promoted every block output of the distributed
+   model to fp32, while the serial model stays in bf16, 23.9 GB kept against 21.8 GB after casting the
+   bias. Fixed for the channels-first layout the FNO uses, guarded by two tests. The rest is the estimate
+   itself: measured activations are 21.8 GB against 18.1 GB analytic, plus about 3 GB of transposition
+   buffers and about 6 GB outside the PyTorch allocator. The `mp` config now uses global batch 8, and the
+   plan carries the correction. The same promotion exists in the ViT's row-parallel layers, but there
+   the residual stream is fp32 anyway (see below), and measured memory is identical.
+7. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
    mixed reduction signatures correctly (gradients equal the serial reference at `dp=2` with
    `sp1 x sp2 = 2x1, 2x2`, and with `tp=2`).
 

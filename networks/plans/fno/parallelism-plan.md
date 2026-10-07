@@ -181,6 +181,20 @@ synchronization (small: the pointwise gradients and the sharded spectral weights
 
 ## Expected Per-GPU Memory
 
+**Measured correction (read this first).** The first 16-GPU job with global batch 16
+(`dp=1, sp=4x4`) ran out of memory on 40 GB GPUs, so the table below is too optimistic by about
+a third. Two measurements explain it. (1) A single rank running the distributed model on one GPU's
+tile, `(16, 16, 1024, 1024)` under bf16 autocast, keeps **21.8 GB** after the forward pass, against
+18.1 GB analytically; the first-order accounting misses some saved tensors. (2) Before a fix, the
+row-parallel bias promoted the residual stream to fp32 (23.9 GB kept). On top of that come about 3 GB of
+all-to-all buffers and, in the failing job, about 6 GB that the PyTorch allocator does not
+count (NCCL communicators, cuFFT workspaces, the CUDA context): 38.5 GB in use against 31.5 GB
+allocated. So a realistic budget at this tile is about 30 to 35 GB, and **global batch 8** is the
+fitting choice on 16 GPUs (about 20 GB); all `dp x sp` splits of 16 GPUs have the same per-GPU memory.
+The static estimates exclude non-PyTorch memory, which the ViT plan already warns about, but
+the FNO's all-to-alls make it large. Activation checkpointing remains the lever for larger batches;
+it is not implemented.
+
 Estimates from `analysis.md`. With sharded I/O everything scales with `dp*sp`: the saved
 activations, including the loss difference, and the temporary memory, which is the FP32 input and
 target shards, the BF16 output shard and the spectral transient. Communication is three times the

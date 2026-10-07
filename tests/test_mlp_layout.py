@@ -52,6 +52,14 @@ class TestMLPLayout(DistributedTestCase):
         torch.testing.assert_close(mlp.fc1.weight.grad, serial.fc1.weight.grad[rank * n : (rank + 1) * n], atol=1e-4, rtol=1e-4)
         torch.testing.assert_close(mlp.fc2.weight.grad, serial.fc2.weight.grad[:, rank * n : (rank + 1) * n], atol=1e-4, rtol=1e-4)
 
+    def test_channels_first_stays_in_the_autocast_dtype(self):
+        """under autocast a channels-first MLP returns bf16, not fp32 (an fp32 bias must not promote the output)"""
+        mlp = MLP(8, 16, 8, layout="channels_first")
+        x = torch.randn(2, 8, 5, 7)
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            y = mlp(x)
+        self.assertEqual(y.dtype, torch.bfloat16)
+
     def test_default_is_channels_last(self):
         self.assertEqual(MLP(4, 8).fc1.layout, "channels_last")
         self.assertEqual(ColumnParallelLinear(4, 8).layout, "channels_last")

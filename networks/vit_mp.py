@@ -43,7 +43,11 @@ def _add_channel_bias(x, bias, layout):
         return x
     if layout == "channels_last":
         return x + bias
-    return x + bias.view(1, -1, *([1] * (x.dim() - 2)))
+    # Channels-first is the FNO's layout: add the bias in the activation dtype. Under autocast the conv output is
+    # bf16 and the bias an fp32 parameter, so `x + bias` would promote the whole residual stream (and what is saved
+    # downstream of it) to fp32, doubling the memory of every later tensor and differing from the serial model, whose
+    # convs apply the bias through autocast. (The ViT's channels-last path is left as it is.)
+    return x + bias.to(x.dtype).view(1, -1, *([1] * (x.dim() - 2)))
 
 
 class ColumnParallelLinear(nn.Module):

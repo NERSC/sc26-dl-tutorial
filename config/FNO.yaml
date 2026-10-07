@@ -13,7 +13,7 @@ base: &base
   # Training config
   img_size: [4096, 4096]
   dt: 1
-  global_batch_size: 1 # one 4096x4096 sample needs ~20 GB at embed_dim 16, the mp config uses 16 over several GPUs
+  global_batch_size: 1 # one 4096x4096 sample needs ~20 GB at embed_dim 16, the mp config uses 8 over 16 GPUs
   num_iters: 30000
   amp_mode: none
   enable_fused: false # fused Adam does not support the complex spectral weights
@@ -70,7 +70,7 @@ opt: &opt
 mp: &mp
   <<: *base
   num_iters: 30000
-  global_batch_size: 16
+  global_batch_size: 8 # 16 ran out of 40 GB on 16 GPUs: ~23 GB of activations per GPU plus ~10 GB of buffers and NCCL/cuFFT memory
   lr: 1e-3
   num_data_workers: 2
   data_loader_config: 'dali'

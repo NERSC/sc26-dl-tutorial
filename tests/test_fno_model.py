@@ -108,6 +108,19 @@ class TestFNOModel(DistributedTestCase):
             expected = shard_of(name, dict(serial.named_parameters())[name].grad, model)
             torch.testing.assert_close(p.grad, expected, atol=1e-4, rtol=1e-3, msg=lambda m: f"{name}: {m}")
 
+    def test_activations_stay_bf16_under_autocast(self):
+        """every block of the distributed FNO outputs bf16 under autocast, like the serial model. An fp32
+        residual stream doubled the activation memory and ran a 16-GPU job out of memory."""
+        model = DistributedFNO((32, 64), 4, 3, 8, 2, 12, 9).to(self.device)
+        dtypes = []
+        for blk in model.blocks:
+            blk.register_forward_hook(lambda m, i, o: dtypes.append(o.dtype))
+        x = self._split(torch.randn(2, 4, 32, 64, device=self.device))
+        with torch.autocast(self.device.type, dtype=torch.bfloat16):
+            y = model(x)
+        self.assertEqual(set(dtypes), {torch.bfloat16})
+        self.assertEqual(y.dtype, torch.bfloat16)
+
     def test_comm_metadata(self):
         model = DistributedFNO((32, 64), 4, 3, 8, 2, 12, 9)
         init_params_for_shared_weights(model)  # validates the metadata of every parameter
