@@ -81,3 +81,30 @@ def make_vit_spatial_shard(
         h_rank=sp1_rank,
         w_rank=sp2_rank,
     )
+
+
+def make_grid_spatial_shard(
+    global_shape: Sequence[int],
+    sp1_size: int,
+    sp1_rank: int,
+    sp2_size: int,
+    sp2_rank: int,
+) -> MeshSpatialShard:
+    """
+    Partition a plain (H, W) grid over the two spatial mesh axes, for models without patches such
+    as the FNO: sp1 splits H and sp2 splits W, balanced, with the same ``compute_split_shapes`` the
+    FFT transposes use. ``token_splits`` is unused (there are no tokens) and left empty.
+    """
+    height, width = map(int, global_shape)
+    h_splits = compute_split_shapes(height, sp1_size)
+    w_splits = compute_split_shapes(width, sp2_size)
+    if min(h_splits + w_splits) <= 0:
+        raise ValueError("spatial mesh creates an empty shard")
+    return MeshSpatialShard(
+        global_shape=(height, width),
+        h_splits=tuple(h_splits),
+        w_splits=tuple(w_splits),
+        token_splits=(),
+        h_rank=sp1_rank,
+        w_rank=sp2_rank,
+    )

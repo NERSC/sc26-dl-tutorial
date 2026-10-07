@@ -21,8 +21,8 @@ from utils import get_data_loader_distributed
 from utils import comm
 from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
-from distributed.spatial_sharding import make_vit_spatial_shard
-from networks import vit_mp, vit_te
+from distributed.spatial_sharding import make_grid_spatial_shard, make_vit_spatial_shard
+from networks import vit_mp, vit_te, fno_mp
 
 from distributed.mappings import (
     allgather_forward_split_backward,
@@ -62,7 +62,10 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
     logging.info("rank %d, data loader initialized" % (world_rank))
 
     # create model
-    if params.model_backend == 'transformer-engine':
+    if params.get("network", "vit") == "fno":
+        logging.info("using FNO")
+        model = fno_mp.FNO(params).to(device)
+    elif params.model_backend == 'transformer-engine':
         logging.info("using transformer-engine backend")
         model = vit_te.ViT(params, spatial_shard=spatial_shard).to(device)
     else:  
@@ -83,8 +86,10 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
             output_device=local_rank,
         )
 
+    # fused Adam does not support complex parameters, such as the FNO's spectral weights
+    use_fused = not any(p.is_complex() for p in model.parameters())
     optimizer = optim.Adam(
-        model.parameters(), lr=params.lr, fused=True, betas=(0.9, 0.95)
+        model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
     )
 
     if world_rank == 0:
@@ -354,15 +359,25 @@ if __name__ == "__main__":
     # for data loader, set the actual number of data shards and id
     params.data_num_shards = comm.get_size("dp")
     params.data_shard_id = comm.get_rank("dp")
-    spatial_shard = make_vit_spatial_shard(
-        global_shape=params.img_size,
-        patch_size=params.patch_size,
-        sp1_size=comm.get_size("sp1"),
-        sp1_rank=comm.get_rank("sp1"),
-        sp2_size=comm.get_size("sp2"),
-        sp2_rank=comm.get_rank("sp2"),
-        order=params.get("order", "tp-sp1-sp2-dp"),
-    )
+    # the shard of the image this rank owns: patch-aligned for the ViT, a plain (H, W) split for the FNO
+    if params.get("network", "vit") == "fno":
+        spatial_shard = make_grid_spatial_shard(
+            global_shape=params.img_size,
+            sp1_size=comm.get_size("sp1"),
+            sp1_rank=comm.get_rank("sp1"),
+            sp2_size=comm.get_size("sp2"),
+            sp2_rank=comm.get_rank("sp2"),
+        )
+    else:
+        spatial_shard = make_vit_spatial_shard(
+            global_shape=params.img_size,
+            patch_size=params.patch_size,
+            sp1_size=comm.get_size("sp1"),
+            sp1_rank=comm.get_rank("sp1"),
+            sp2_size=comm.get_size("sp2"),
+            sp2_rank=comm.get_rank("sp2"),
+            order=params.get("order", "tp-sp1-sp2-dp"),
+        )
 
     # Set up directory
     baseDir = params.expdir

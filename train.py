@@ -18,7 +18,7 @@ from utils import get_data_loader_distributed
 from utils.loss import mse_loss
 from utils.metrics import rmse
 from utils.plots import generate_images
-from networks import vit
+from networks import vit, fno
 
 
 def train(params, writer, local_rank, world_rank, world_size):
@@ -38,15 +38,20 @@ def train(params, writer, local_rank, world_rank, world_size):
     logging.info("rank %d, data loader initialized" % (world_rank))
 
     # create model
-    model = vit.ViT(params).to(device)
+    if params.get("network", "vit") == "fno":
+        model = fno.FNO(params).to(device)
+    else:
+        model = vit.ViT(params).to(device)
     if params.enable_jit:
         model = torch.compile(model)
 
     if params.distributed:
         model = DistributedDataParallel(model, device_ids=[local_rank])
 
+    # fused Adam does not support complex parameters, such as the FNO's spectral weights
+    use_fused = not any(p.is_complex() for p in model.parameters())
     optimizer = optim.Adam(
-        model.parameters(), lr=params.lr, fused=True, betas=(0.9, 0.95)
+        model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
     )
 
     if world_rank == 0:
