@@ -243,7 +243,8 @@ Risks:
 - Large FP32 FFT workspaces and the FP32 spectral island may push the peak above the
   estimate.
 - The distributed model cannot be compiled with `fullgraph=True` because the collectives are
-  excluded from the graph.
+  excluded from the graph. The spectral layers are excluded too (`@torch.compiler.disable`): FFT
+  fallback kernels broke inductor's stride assertion on the NERSC container's torch at 4096^2.
 
 ## Affected Files and Model Boundaries
 

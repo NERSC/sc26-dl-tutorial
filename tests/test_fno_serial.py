@@ -94,13 +94,25 @@ class TestFNOSerial(unittest.TestCase):
                 torch.testing.assert_close(y[..., k], x[..., k])
 
     @parameterized.expand([[dev] for dev in DEVICES])
-    def test_compile_fullgraph(self, dev):
-        layer = FourierNeuralOperatorLayer(4, 4, 32, 64, 12, 17).to(dev)
-        x = torch.randn(2, 4, 32, 64, device=dev, requires_grad=True)
-        y = torch.compile(layer, fullgraph=True)(x)
-        torch.testing.assert_close(y, layer(x), atol=1e-5, rtol=1e-5)
+    def test_compile_keeps_the_ffts_out_of_the_graph(self, dev):
+        """Under torch.compile no FFT may appear in a compiled graph: with some torch versions inductor's FFT
+        fallback kernels assert on the output strides (seen on the NERSC container at 4096^2). The pointwise
+        layers still compile, and the result matches eager."""
+        torch._dynamo.reset()
+        model = FourierNeuralOperator((32, 64), 4, 4, 16, 2, 12, 17).to(dev)
+        x = torch.randn(2, 4, 32, 64, device=dev)
+        ops = []
+
+        def backend(gm, example_inputs):
+            ops.extend(str(n.target) for n in gm.graph.nodes if n.op in ("call_function", "call_method", "call_module"))
+            return gm.forward
+
+        y = torch.compile(model, backend=backend)(x)
+        self.assertTrue(ops, "nothing was compiled")
+        self.assertFalse([o for o in ops if "fft" in o.lower()], "an FFT is inside a compiled graph")
+        torch.testing.assert_close(y, model(x), atol=1e-5, rtol=1e-5)
         y.square().sum().backward()
-        self.assertTrue(torch.isfinite(layer.weight.grad).all())
+        self.assertTrue(torch.isfinite(model.blocks[0].spectral.weight.grad).all())
 
     def test_pointwise_init_follows_the_fan_in_rule(self):
         """weights N(0, 1/(3 fan_in)), biases U(+-1/sqrt(fan_in)), with fan_in the layer's input channels"""

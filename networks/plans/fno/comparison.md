@@ -33,7 +33,7 @@ defects in the implementation (Section 2), all fixed.
 | Initialization statistically equivalent to the serial model, from global sizes | Spectral weights match. Pointwise weights use the ViT layers' constant `trunc_normal_(std=0.02)` and zero biases; the serial model uses PyTorch's conv default (fan-in scaled weights, random biases) | **Differs, fixed**: at width 16 the signal vanished at init (output std 0.0000, gradients 1e-13..1e-16) and the loss after 480 iterations was 0.596 versus 0.014 for the serial model. Now one rule, `init_pointwise_`, from global sizes in both models; `tests/test_fno_init.py`; `train_mp.py` trains (validation MSE 1.015 to 0.00025 in 960 iterations on the smoke problem) |
 | Representative `embed_dim` | `config/FNO.yaml` `mp` carried 128 (2.27 TB of activations) | **Differed, fixed**: set to 16 |
 | Activation checkpointing for the 4- and 8-GPU rows | Not implemented | Gap (the plan marks those rows infeasible) |
-| `fullgraph` compile | Serial compiles; distributed cannot (collectives are `@torch.compiler.disable`) | Known limit, not in the ViT plan's vocabulary |
+| `torch.compile` | The spectral layers are `@torch.compiler.disable`d in both models, so no FFT is ever in a compiled graph; the pointwise layers compile. The distributed model cannot be `fullgraph` anyway (collectives are excluded) | Matches, after a fix: with `enable_jit: true` on the NERSC container's torch the FFT fallback kernels failed an inductor stride assertion at 4096^2 (`expected stride 1==2049 at dim=2`, the c2c along h). Guarded by `test_compile_keeps_the_ffts_out_of_the_graph`. Not in the ViT plan's vocabulary |
 | Memory and communication numbers | Analytical only | Not measured |
 
 ## 2. What applying the plan found
@@ -55,7 +55,15 @@ defects in the implementation (Section 2), all fixed.
    `1/sqrt(3 fan_in)`, biases `U(+-1/sqrt(fan_in))`) with the global fan-in, and
    `tests/test_fno_init.py` guards it, including the tensor-parallel cases where a local shape would
    give a wrong fan-in. The plan requires it (Initialization Handoff), with the measurements.
-5. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
+5. **`torch.compile` crashed at full size on another torch version.** The first cluster job with
+   `enable_jit: true` died in the first forward pass with an inductor `assert_size_stride` error: the
+   FFT fallback kernel returned a different memory layout than its meta kernel promises. The
+   earlier compile checks (a `fullgraph=True` test on small images) passed on a newer torch and could
+   not see it. Fixed by keeping the spectral layers out of the compiled graph, which does not depend
+   on which FFT op or torch version is at fault. Not reproduced locally (torch 2.13 compiles at
+   4096^2), so the fix is verified here only by the graph-contents test, and by the trainers running
+   with `enable_jit: true`, not on the cluster's torch.
+6. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
    mixed reduction signatures correctly (gradients equal the serial reference at `dp=2` with
    `sp1 x sp2 = 2x1, 2x2`, and with `tp=2`).
 
@@ -126,7 +134,8 @@ Each item gives the extension and the evidence from the FNO.
     FNO the sharded interface saves about 2.8 GB per GPU at the primary mesh (27.0 to 24.2 GB),
     a 0.40 GB output gather per step, and every rank reads a quarter of the pixels.
 Two further notes that do not change the method but belong in a shared template: the plan has
-no compile-safety contract (which ops are graph breaks, whether `fullgraph` is possible), and the
+no compile-safety contract (which ops stay out of the graph, and a check on the graph contents rather
+than on `fullgraph`, which passed here while the cluster's torch failed), and the
 data contract (full image on every model-parallel rank, full gathered output) becomes a larger
 cost for models with more channels, which motivates the sharded-loss alternative.
 

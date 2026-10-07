@@ -72,6 +72,12 @@ class FourierNeuralOperatorLayer(nn.Module):
         )
         self.weight = nn.Parameter(init)
 
+    # The spectral layer runs eagerly even under torch.compile. Inductor lowers the FFTs to fallback kernels
+    # that assert the output strides of the op's meta kernel, and with some torch versions cuFFT returns a
+    # different layout (seen as `assert_size_stride ... expected stride 1==2049 at dim=2` for the c2c along h
+    # at 4096^2). Keeping every FFT out of the compiled graph avoids the problem independently of the version;
+    # the pointwise layers around it still compile, and they are what inductor fuses.
+    @torch.compiler.disable
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dtype = x.dtype
 
