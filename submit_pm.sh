@@ -11,10 +11,8 @@
 #SBATCH -J vit-era5
 #SBATCH -o %x-%j.out
 
-# host paths, mounted as /data and /logs in the container; override from the environment, e.g.
-#   LOGDIR=$PSCRATCH/my_logs sbatch ./submit_pm.sh ...
-DATADIR=${DATADIR:-/pscratch/sd/s/shas1693/data/sc26_tutorial_data}
-LOGDIR=${LOGDIR:-${SCRATCH}/sc25-dl-tutorial/logs}
+DATADIR=/pscratch/sd/s/shas1693/data/sc26_tutorial_data
+LOGDIR=${SCRATCH}/sc25-dl-tutorial/logs
 mkdir -p ${LOGDIR}
 args="${@}"
 

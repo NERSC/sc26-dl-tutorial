@@ -8,7 +8,6 @@ from distributed.helpers import (
     _reduce,
     _reduce_scatter,
     _split,
-    _transpose,
     compute_split_shapes,
     validate_param_comm_metadata,
 )
@@ -124,44 +123,6 @@ class _AllGatherForwardReduceScatterBackward(torch.autograd.Function):
             None,
             None,
         )
-
-
-class _DistributedTranspose(torch.autograd.Function):
-    @staticmethod
-    def forward(input_, dims_, shapes_, comm_name_):
-        input_ = input_.contiguous()
-        if comm.get_size(comm_name_) == 1:
-            return input_
-        xlist, _ = _transpose(input_, dims_[0], dims_[1], shapes_, comm_name_)
-        return torch.cat(xlist, dim=dims_[1]).contiguous()
-
-    @staticmethod
-    def setup_context(ctx, inputs, output):
-        input_, ctx.dims, _, ctx.comm_name = inputs
-        ctx.dim0_shapes = compute_split_shapes(
-            input_.shape[ctx.dims[0]], comm.get_size(ctx.comm_name)
-        )
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        grad_output = grad_output.contiguous()
-        if comm.get_size(ctx.comm_name) == 1:
-            return grad_output, None, None, None
-        glist, _ = _transpose(
-            grad_output, ctx.dims[1], ctx.dims[0], ctx.dim0_shapes, ctx.comm_name
-        )
-        return torch.cat(glist, dim=ctx.dims[0]).contiguous(), None, None, None
-
-
-@torch.compiler.disable
-def distributed_transpose(input_, dims, shapes, comm_name):
-    """Swap which dimension is sharded via all-to-all.
-
-    ``input_`` is local along ``dims[0]`` and split along ``dims[1]``; the output is
-    split along ``dims[0]`` and local along ``dims[1]``. ``shapes`` are the per-rank
-    sizes along ``dims[1]`` (receive sizes). Backward is the inverse transpose.
-    """
-    return _DistributedTranspose.apply(input_, dims, shapes, comm_name)
 
 
 @torch.compiler.disable

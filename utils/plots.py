@@ -8,6 +8,6 @@ def generate_images(fields):
     ax[0].imshow(tar[0, 2, :, :], cmap="turbo")
     ax[0].set_title("Synthetic target")
     ax[1].imshow(gen[0, 2, :, :], cmap="turbo")
-    ax[1].set_title("Prediction")
+    ax[1].set_title("ViT prediction")
     fig.tight_layout()
     return fig

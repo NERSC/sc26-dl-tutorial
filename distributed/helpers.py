@@ -157,19 +157,7 @@ def _gather(input_, dim_, shapes_, comm_name):
         # assume equal shape on all ranks
         input_list = [torch.empty_like(input_) for _ in range(comm_size)]
 
-    group = comm.get_group(comm_name)
-    if shapes_ is not None and len(set(shapes_)) > 1 and dist.get_backend(group) == "gloo":
-        # gloo's all_gather needs equal shapes: pad to the largest shard, gather, trim
-        pad = max(shapes_) - input_.shape[dim_]
-        if pad > 0:
-            pad_shape = list(input_.shape)
-            pad_shape[dim_] = pad
-            input_ = torch.cat([input_, input_.new_zeros(pad_shape)], dim=dim_)
-        padded = [torch.empty_like(input_) for _ in range(comm_size)]
-        dist.all_gather(padded, input_, group=group)
-        input_list = [t.narrow(dim_, 0, n) for t, n in zip(padded, shapes_)]
-    else:
-        dist.all_gather(input_list, input_, group=group)
+    dist.all_gather(input_list, input_, group=comm.get_group(comm_name))
     output = torch.cat(input_list, dim=dim_).contiguous()
 
     return output
@@ -214,53 +202,3 @@ def _reduce_scatter(input_, dim_, shapes_, comm_name):
     return split_tensor_along_dim(
         reduced, dim_, comm_size, shapes_
     )[comm_rank].contiguous()
-
-
-def _transpose(tensor, dim0, dim1, dim1_split_sizes, comm_name):
-    """
-    All-to-all transpose: dim0 (local in the input) becomes split across the group,
-    dim1 (split in the input) becomes local. Returns the list of received chunks,
-    to be concatenated along dim1, and the dim0 split sizes.
-    """
-    comm_size = comm.get_size(comm_name)
-    if comm_size == 1:
-        return [tensor], [tensor.size(dim0)]
-    if len(dim1_split_sizes) != comm_size:
-        raise ValueError(
-            f"Error: passed shapes of size {len(dim1_split_sizes)} not equal to {comm_size}"
-        )
-    comm_rank = comm.get_rank(comm_name)
-
-    # split and make send buffers contiguous
-    x_send = [
-        t.contiguous()
-        for t in split_tensor_along_dim(tensor, dim0, comm_size)
-    ]
-    dim0_split_sizes = [x.shape[dim0] for x in x_send]
-
-    # receive buffers: dim0 is the local chunk size, dim1 comes from each source
-    x_shape = list(x_send[comm_rank].shape)
-    x_recv = []
-    for dim1_len in dim1_split_sizes:
-        x_shape[dim1] = dim1_len
-        x_recv.append(
-            torch.empty(x_shape, dtype=tensor.dtype, device=tensor.device)
-        )
-
-    group = comm.get_group(comm_name)
-    if dist.get_backend(group) == "gloo":
-        # gloo's all_to_all only supports equal chunk sizes, use point-to-point instead
-        x_recv[comm_rank].copy_(x_send[comm_rank])
-        ops = []
-        for peer in range(comm_size):
-            if peer == comm_rank:
-                continue
-            global_peer = dist.get_global_rank(group, peer)
-            ops.append(dist.P2POp(dist.isend, x_send[peer], global_peer, group))
-            ops.append(dist.P2POp(dist.irecv, x_recv[peer], global_peer, group))
-        for req in dist.batch_isend_irecv(ops):
-            req.wait()
-    else:
-        dist.all_to_all(x_recv, x_send, group=group)
-
-    return x_recv, dim0_split_sizes

@@ -18,7 +18,7 @@ from utils import get_data_loader_distributed
 from utils.loss import mse_loss
 from utils.metrics import rmse
 from utils.plots import generate_images
-from networks import vit, fno
+from networks import vit
 
 
 def train(params, writer, local_rank, world_rank, world_size):
@@ -38,20 +38,15 @@ def train(params, writer, local_rank, world_rank, world_size):
     logging.info("rank %d, data loader initialized" % (world_rank))
 
     # create model
-    if params.get("network", "vit") == "fno":
-        model = fno.FNO(params).to(device)
-    else:
-        model = vit.ViT(params).to(device)
+    model = vit.ViT(params).to(device)
     if params.enable_jit:
         model = torch.compile(model)
 
     if params.distributed:
         model = DistributedDataParallel(model, device_ids=[local_rank])
 
-    # fused Adam does not support complex parameters, such as the FNO's spectral weights
-    use_fused = not any(p.is_complex() for p in model.parameters())
     optimizer = optim.Adam(
-        model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
+        model.parameters(), lr=params.lr, fused=True, betas=(0.9, 0.95)
     )
 
     if world_rank == 0:
@@ -215,20 +210,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", default="base", type=str, help="name of desired config in yaml file"
     )
-    parser.add_argument(
-        "--expdir",
-        default=None,
-        type=str,
-        help="output directory for logs and TensorBoard files, overrides expdir of the config. "
-        "Inside the container, so it has to be below a mounted path such as /logs",
-    )
     args = parser.parse_args()
 
     run_num = args.run_num
 
     params = YParams(os.path.abspath(args.yaml_config), args.config)
-    if args.expdir is not None:
-        params.expdir = args.expdir
 
     params.distributed = False
     if "WORLD_SIZE" in os.environ:
