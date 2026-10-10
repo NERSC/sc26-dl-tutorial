@@ -13,11 +13,49 @@ from distributed.mappings import (
 )
 
 
+_LAYOUTS = ("channels_last", "channels_first")
+
+
+def _check_layout(layout):
+    if layout not in _LAYOUTS:
+        raise ValueError(f"layout must be one of {_LAYOUTS}, got {layout!r}")
+    return layout
+
+
+def _pointwise_linear(x, weight, bias, layout):
+    """
+    Linear map over the channel dim, for either layout. The weight is (out, in) in both, so
+    parameters, sharding and checkpoints do not depend on the layout.
+
+    channels_last:  x is (..., C), F.linear.
+    channels_first: x is (B, C, *spatial), a 1x1 conv1d over the flattened spatial dims
+                    (a free view for contiguous inputs), so no permute copies are needed.
+    """
+    if layout == "channels_last":
+        return F.linear(x, weight, bias)
+    spatial = x.shape[2:]
+    y = F.conv1d(x.flatten(2), weight.unsqueeze(-1), bias)
+    return y.reshape(y.shape[0], y.shape[1], *spatial)
+
+
+def _add_channel_bias(x, bias, layout):
+    if bias is None:
+        return x
+    if layout == "channels_last":
+        return x + bias
+    # Channels-first is the FNO's layout: add the bias in the activation dtype. Under autocast the conv output is
+    # bf16 and the bias an fp32 parameter, so `x + bias` would promote the whole residual stream (and what is saved
+    # downstream of it) to fp32, doubling the memory of every later tensor and differing from the serial model, whose
+    # convs apply the bias through autocast. (The ViT's channels-last path is left as it is.)
+    return x + bias.to(x.dtype).view(1, -1, *([1] * (x.dim() - 2)))
+
+
 class ColumnParallelLinear(nn.Module):
     """Linear layer sharded over its stored output-feature dimension."""
 
-    def __init__(self, in_features, out_features, bias=True):
+    def __init__(self, in_features, out_features, bias=True, layout="channels_last"):
         super().__init__()
+        self.layout = _check_layout(layout)
         tp_size = comm.get_size("tp")
         if out_features % tp_size != 0:
             raise ValueError(
@@ -50,14 +88,15 @@ class ColumnParallelLinear(nn.Module):
 
     def forward(self, x):
         x = identity_forward_allreduce_backward(x, "tp")
-        return F.linear(x, self.weight, self.bias)
+        return _pointwise_linear(x, self.weight, self.bias, self.layout)
 
 
 class RowParallelLinear(nn.Module):
     """Linear layer sharded over its stored input-feature dimension."""
 
-    def __init__(self, in_features, out_features, bias=True):
+    def __init__(self, in_features, out_features, bias=True, layout="channels_last"):
         super().__init__()
+        self.layout = _check_layout(layout)
         tp_size = comm.get_size("tp")
         if in_features % tp_size != 0:
             raise ValueError(
@@ -89,11 +128,9 @@ class RowParallelLinear(nn.Module):
             nn.init.zeros_(self.bias)
 
     def forward(self, x):
-        x = F.linear(x, self.weight, bias=None)
+        x = _pointwise_linear(x, self.weight, None, self.layout)
         x = allreduce_forward_identity_backward(x, "tp")
-        if self.bias is not None:
-            x = x + self.bias
-        return x
+        return _add_channel_bias(x, self.bias, self.layout)
 
 
 class MLP(nn.Module):
@@ -104,13 +141,15 @@ class MLP(nn.Module):
         out_features=None,
         act_layer=nn.GELU,
         drop=0.0,
+        layout="channels_last",
     ):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1 = ColumnParallelLinear(in_features, hidden_features)
+        # layout: "channels_last" (..., C), as used by the ViT, or "channels_first" (B, C, *spatial)
+        self.fc1 = ColumnParallelLinear(in_features, hidden_features, layout=layout)
         self.act = act_layer()
-        self.fc2 = RowParallelLinear(hidden_features, out_features)
+        self.fc2 = RowParallelLinear(hidden_features, out_features, layout=layout)
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
