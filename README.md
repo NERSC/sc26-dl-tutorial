@@ -79,6 +79,8 @@ The script to train the model is [`train.py`](train.py), which uses the followin
 --config CONFIG             name of desired config in yaml file
 ```
 
+See [Configuration files and choosing a network](#configuration-files-and-choosing-a-network) for what is in these files and how to create your own.
+
 Based on the selected configuration, the train script will then:
 1.  Set up the data loaders and construct our ViT model, the Adam optimizer, and our L2 loss function.
 2.  Loop over training epochs to run the training. See if you can identify the following key components: 
@@ -89,6 +91,70 @@ Based on the selected configuration, the train script will then:
 
 More info on the model and data can be found in the [slides](https://drive.google.com/drive/folders/10sUC4RK98DlapVuPPekcjysOnYgEUn_Z?usp=sharing). If you are experimenting with this repository after the tutorial date, you can download the data from here: https://portal.nersc.gov/project/dasrepo/pharring/sc23_data.
 Note that you will have to adjust the data path in `submit_pm.sh` to point your personal copy after downloading.
+
+### Configuration files and choosing a network
+
+All training settings live in YAML files in [`config/`](config), and each file holds several *named configs*.
+A run is selected with two flags, which the submission scripts (`submit_pm.sh`, `submit_pm_dp.sh`, `submit_pm_mp.sh`) forward to the training script:
+```
+--yaml_config PATH    # which file, default ./config/ViT.yaml
+--config NAME         # which named config in that file, default base
+```
+
+| File | Network | Named configs |
+|---|---|---|
+| [`config/ViT.yaml`](config/ViT.yaml) | Vision transformer ([`networks/vit.py`](networks/vit.py), model-parallel: [`networks/vit_mp.py`](networks/vit_mp.py)) | `base`, `short`, `short_opt`, `opt`, `mp`, `mp_te` |
+| [`config/FNO.yaml`](config/FNO.yaml) | Fourier neural operator ([`networks/fno.py`](networks/fno.py), model-parallel: [`networks/fno_mp.py`](networks/fno_mp.py)) | `base`, `short`, `short_opt`, `opt`, `mp` |
+
+The network is chosen by the `network` key inside the config: it is absent in `ViT.yaml` (the default is the ViT) and `network: 'fno'` in `FNO.yaml`.
+`train.py` (single GPU and data parallel) and `train_mp.py` (model parallel) both honor it, so the same flags work for either network:
+```
+# ViT, the default
+sbatch -n 1 -t 20 ./submit_pm.sh --config=short
+
+# FNO, a quick single-GPU run
+sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config short
+
+# FNO, model parallel: the 2x2 spatial tile shards H over sp1 and W over sp2, DP fills the rest (16 GPUs here)
+sbatch --nodes=4 submit_pm_mp.sh --yaml_config ./config/FNO.yaml --config mp --tp=1 --sp1=2 --sp2=2 --run_num=fno_sp2x2
+```
+
+The data and training keys (`img_size`, `n_in_channels`, `global_batch_size`, `lr`, `data_loader_config`, ...) are shared by both files. The model keys differ:
+
+| Network | Model keys |
+|---|---|
+| ViT | `embed_dim`, `depth`, `num_heads`, `patch_size`, `dropout` |
+| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers in h and w after truncation, `None` keeps all), `mlp_ratio` (width of the per-block channel MLP, `0` disables it), `spectral_init_k0` (starts the spectral weights of high wavenumbers smaller, by `1/(1+(k/k0)^2)` with `k` in grid-index units; `None` disables, see the plan) |
+
+Two things to keep in mind for the FNO:
+* It works at the full image resolution in every layer, so its activation memory scales with `embed_dim` times the number of grid points. The `mp` config therefore uses `embed_dim: 16` for the 4096 x 4096 images, the single-GPU configs use a global batch size of 1, and `mp` uses 8 on 16 GPUs (16 ran out of 40 GB). See [`networks/plans/fno/analysis.md`](networks/plans/fno/analysis.md) for the numbers.
+* With model parallelism, `sp1` and `sp2` shard the image in H and W, and the FFT transposes the data between them. Like the ViT, the FNO is sharded at its interface: each rank loads only its (H, W) tile of every image (`spatial_read_mode: 'local'`), the model takes and returns that tile, and the loss and metrics are all-reduced over the spatial group, so no rank holds the full image. The channel count (`embed_dim`), the image size and the retained mode counts must each be at least `sp1` and `sp2`, otherwise the model raises an error when it is built. Use `--tp=1`: the FNO has almost no weights to shard with tensor parallelism. See [`networks/plans/fno/parallelism-plan.md`](networks/plans/fno/parallelism-plan.md).
+
+#### Creating your own config
+
+Copy a named config in the YAML file and change what you need. The configs inherit from each other with YAML anchors, so a new config only has to list the differences:
+```yaml
+# in config/FNO.yaml
+my_fno:
+  <<: *base          # start from `base` and override
+  embed_dim: 32
+  modes_kh: 32
+  modes_kw: 32
+  num_iters: 500
+```
+```
+sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config my_fno
+```
+To start a new file, copy an existing one: it needs the same data, training and communication keys, plus the model keys of the network you want.
+
+Notes:
+* The command-line options are `--yaml_config`, `--config`, `--run_num` and `--expdir` (plus `--tp`, `--sp1`, `--sp2` and `--order` for `train_mp.py`). Every other setting is changed in the YAML file.
+* Results are written to `<expdir>/<config>/<N>GPU/<run_num>`, and only the config *name* is part of the path. The two files both have configs named `base` and `mp`, so give runs from different files different `--run_num`s (as in `--run_num=fno_sp2x2` above), otherwise they write to the same directory.
+* **Choosing where output goes.** Two paths are involved. The submission scripts mount a host directory as `/logs` in the container, by default `$SCRATCH/sc25-dl-tutorial/logs`, and the data directory as `/data`. Set `LOGDIR` (and `DATADIR`) in the environment to use other host directories, for example after a quota error on scratch:
+  ```
+  LOGDIR=$PSCRATCH/fno_logs sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config short
+  ```
+  The `expdir` of the config (`/logs` by default) is a path *inside* the container, so it has to lie below a mounted directory. `--expdir /logs/runs_a` writes to `runs_a` inside `LOGDIR`, and `--expdir` overrides `expdir` of the config for a single run.
 
 ## Single GPU training
 
