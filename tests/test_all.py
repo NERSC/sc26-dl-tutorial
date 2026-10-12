@@ -1,435 +1,256 @@
+"""Master distributed-equivalence test.
+
+Run with ``TEST_MODEL=vit``, ``TEST_MODEL=swin``, or ``TEST_MODEL=fno``.
+"""
+
 import os
+import unittest
+
 import torch
 import torch.distributed as dist
-import torch.nn as nn
-import unittest
-import datetime as dt
-from utils.rank_generator import RankGenerator
-from utils import comm
-
-from networks.vit import VisionTransformer
-from networks.vit_mp import VisionTransformer as DistributedVisionTransformer
 from parameterized import parameterized
-from distributed.helpers import (
-    _gather,
-    compute_split_shapes,
-    init_params_for_shared_weights,
-)
+
+from distributed.helpers import init_params_for_shared_weights
 from distributed.mappings import (
-    split_forward_allgather_backward,
     allgather_forward_split_backward,
     init_ddp_model_and_reduction_hooks,
+    split_forward_allgather_backward,
 )
+from distributed.spatial_sharding import (
+    make_grid_spatial_shard,
+    make_swin_spatial_shard,
+    make_vit_spatial_shard,
+)
+from networks.fno import FourierNeuralOperator
+from networks.fno_mp import FourierNeuralOperator as DistributedFNO
+from networks.swin import SwinTransformer
+from networks.swin_mp import DistributedSwinTransformer
+from networks.vit import VisionTransformer
+from networks.vit_mp import VisionTransformer as DistributedVisionTransformer
+from tests.helpers import (
+    DistributedTestCase,
+    assert_reference_gradients,
+    copy_reference_parameters,
+)
+from utils import comm
 from utils.loss import mse_loss
-from distributed.spatial_sharding import make_vit_spatial_shard
 
 
-class TestDistributed(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.world_size = int(os.getenv("WORLD_SIZE", 1))
-        cls.world_rank = int(os.getenv("RANK", 0))
-        port = int(os.getenv("MASTER_PORT", 0))
-        master_address = os.getenv("MASTER_ADDR")
+MODEL = os.getenv("TEST_MODEL", "vit").lower()
+if MODEL not in {"vit", "swin", "fno"}:
+    raise ValueError("TEST_MODEL must be one of: vit, swin, fno")
 
-        # get model parallel sizes
-        tp = int(os.getenv("TP", 1))
-        sp1 = int(os.getenv("SP1", 1))
-        sp2 = int(os.getenv("SP2", 1))
-        order = "sp1-sp2-tp-dp"
-        model_parallel_size = tp * sp1 * sp2
-        assert cls.world_size % model_parallel_size == 0
-        dp = cls.world_size // model_parallel_size
-        assert dp >= 1, "ERROR: data parallel wireup failed since dp = {}".format(dp)
+CASES = {
+    "vit": [
+        # (name, batch/DP rank, H, W, patch, channels, embed, heads, depth, tolerance)
+        ("small", 4, 128, 128, 8, 4, 512, 8, 2, 1e-5),
+        ("rectangular", 4, 360, 720, 8, 20, 512, 8, 2, 1e-5),
+    ],
+    "swin": [
+        # (name, batch/DP rank, H, W, patch, channels, embed, heads, depth, tolerance)
+        # Swin's window size is fixed to (4, 4) in build_models().
+        ("small", 4, 128, 128, 4, 4, 64, 8, 2, 1e-5),
+        ("rectangular", 4, 256, 512, 4, 4, 64, 8, 2, 1e-5),
+    ],
+    "fno": [
+        # (name, batch/DP rank, H, W, unused, channels, embed, unused, depth, tolerance)
+        # FNO has no patch size or attention heads; those tuple positions are placeholders.
+        ("even", 4, 64, 64, 1, 4, 32, 1, 2, 1e-5),
+    ],
+}
 
-        cls.print_to_screen = cls.world_rank == 0
-        if cls.print_to_screen:
-            print(
-                "Distributed unit tests with DP = {}, TP = {}, SP1 = {}, SP2 = {}".format(
-                    dp, tp, sp1, sp2
-                )
-            )
 
-        if torch.cuda.is_available():
-            if cls.print_to_screen:
-                print("Running test on GPU")
-            cls.local_rank = cls.world_rank % torch.cuda.device_count()
-            cls.device = torch.device(f"cuda:{cls.local_rank}")
-            torch.cuda.set_device(cls.device)
-            torch.cuda.manual_seed(333)
-            cls.comm_backend = "nccl"
-        else:
-            if cls.print_to_screen:
-                print("Running test on CPU")
-            cls.device = torch.device("cpu")
-            cls.comm_backend = "gloo"
-        torch.manual_seed(333)
-
-        if cls.world_size > 1:
-            # create tcp store
-            store = dist.TCPStore(
-                host_name=master_address,
-                port=port,
-                world_size=cls.world_size,
-                is_master=(cls.world_rank == 0),
-                timeout=dt.timedelta(seconds=900),
-            )
-
-            # initialize process groups
-            dist.init_process_group(
-                backend=cls.comm_backend,
-                rank=cls.world_rank,
-                world_size=cls.world_size,
-                store=store,
-            )
-        else:
-            assert False, "Running distributed tests on single GPU"
-
-        # init model + dp groups individually
-        comm.init_model_parallel_info(
-            dp=dp, tp=tp, sp1=sp1, sp2=sp2, order=order
-        )
-
-    @classmethod
-    def tearDownClass(cls):
-        dist.destroy_process_group(None)
-
-    def _get_flattened_grads(self, model):
-        """Get flattened gradients from a model"""
-        grads = []
-        for name, p in model.named_parameters():
-            if p.grad is not None:
-                grads.append(p.grad.view(-1))
-        return torch.cat(grads) if grads else torch.tensor([], device=self.device)
-
-    def _get_reconstructed_grads(self, model):
-        """Get reconstructed gradients from a distributed model, handling shared parameters"""
-        tp_size = comm.get_size("tp")
-
-        all_grads = []
-        col_sharded_layers = ["fc2", "attn.proj"]  # need to gather differently
-
-        if model.pos_embed.grad is not None:
-            pos_grad = _gather(
-                model.pos_embed.grad,
-                dim_=2,
-                shapes_=[
-                    size // model.patch_size
-                    for size in model.spatial_shard.w_splits
-                ],
-                comm_name="sp2",
-            )
-            pos_grad = _gather(
-                pos_grad,
-                dim_=1,
-                shapes_=[
-                    size // model.patch_size
-                    for size in model.spatial_shard.h_splits
-                ],
-                comm_name="sp1",
-            )
-            all_grads.append(pos_grad.view(-1))
-
-        # Handle patch embed gradients (shared in both tp and sp1)
-        if model.patch_embed.proj.weight.grad is not None:
-            all_grads.append(model.patch_embed.proj.weight.grad.view(-1))
-        if (
-            hasattr(model.patch_embed.proj, "bias")
-            and model.patch_embed.proj.bias.grad is not None
-        ):
-            all_grads.append(model.patch_embed.proj.bias.grad.view(-1))
-
-        # Handle transformer block gradients
-        for name, param in model.named_parameters():
-            if "blocks" in name and param.grad is not None:
-                if "tp" in param.comm_metadata["sharded"]:
-                    # sharded params, so gather them
-                    grad = param.grad
-                    gathered_grads = [torch.zeros_like(grad) for _ in range(tp_size)]
-                    dist.all_gather(gathered_grads, grad, group=comm.get_group("tp"))
-                    if any(nm in name for nm in col_sharded_layers):
-                        grad = torch.cat(gathered_grads, dim=1).view(-1)
-                    else:
-                        grad = torch.cat([g.view(-1) for g in gathered_grads])
-                    all_grads.append(grad)
-                else:
-                    all_grads.append(param.grad.view(-1))
-
-        # Handle norm gradients (shared across tp-sp1-sp2)
-        if model.norm.weight.grad is not None:
-            all_grads.append(model.norm.weight.grad.view(-1))
-            all_grads.append(model.norm.bias.grad.view(-1))
-        # Handle head gradients (shared across tp-sp1-sp2)
-        if model.head.weight.grad is not None:
-            all_grads.append(model.head.weight.grad.view(-1))
-
-        return (
-            torch.cat(all_grads) if all_grads else torch.tensor([], device=self.device)
-        )
-
-    def _copy_mlp_weights(self, mlp_layer, mlp_layer_distributed):
-        """copy the weights, bias of mlp into the correct shard of mlp_dist"""
-        tp = comm.get_size("tp")
-        # fc1 is col sharded, fc2 is row sharded (careful: PyT does AW^T)
-        embed_local = mlp_layer.fc1.weight.shape[0] // tp
-        rank_tp = comm.get_rank("tp")  # which tp rank
-
-        # copy sharded weights and biases for fc1
-        start = rank_tp * embed_local
-        end = start + embed_local
-        mlp_layer_distributed.fc1.weight.copy_(mlp_layer.fc1.weight[start:end, :])
-        mlp_layer_distributed.fc1.bias.copy_(mlp_layer.fc1.bias[start:end])
-        # copy sharded weights for fc2
-        mlp_layer_distributed.fc2.weight.copy_(mlp_layer.fc2.weight[:, start:end])
-        # copy shared bias for fc2 across all shards
-        mlp_layer_distributed.fc2.bias.copy_(mlp_layer.fc2.bias)
-
-    def _copy_attn_weights(self, attn_layer, attn_layer_distributed):
-        """copy the weights, bias of attn into the correct shard of attn_dist"""
-        tp = comm.get_size("tp")
-        embed = attn_layer.proj.weight.shape[1]
-        embed_local = embed // tp
-        rank_tp = comm.get_rank("tp")  # which tp rank
-
-        # copy sharded weights and biases for qkv
-        start = rank_tp * embed_local
-        end = start + embed_local
-        attn_layer_distributed.q.weight.copy_(attn_layer.q.weight[start:end, :])
-        attn_layer_distributed.q.bias.copy_(attn_layer.q.bias[start:end])
-        attn_layer_distributed.k.weight.copy_(attn_layer.k.weight[start:end, :])
-        attn_layer_distributed.k.bias.copy_(attn_layer.k.bias[start:end])
-        attn_layer_distributed.v.weight.copy_(attn_layer.v.weight[start:end, :])
-        attn_layer_distributed.v.bias.copy_(attn_layer.v.bias[start:end])
-        # copy sharded weights for proj
-        start = rank_tp * embed_local
-        end = start + embed_local
-        attn_layer_distributed.proj.weight.copy_(attn_layer.proj.weight[:, start:end])
-        attn_layer_distributed.proj.bias.copy_(attn_layer.proj.bias)
-
-    def _copy_vit_weights(self, model, model_distributed):
-        """copy the weights of the model into the correct shard of model_distributed"""
-        with torch.no_grad():
-            # copy patch embed weights
-            model_distributed.patch_embed.proj.weight.copy_(
-                model.patch_embed.proj.weight
-            )
-            model_distributed.patch_embed.proj.bias.copy_(model.patch_embed.proj.bias)
-            # copy pos embed weights
-            h_slice, w_slice = model_distributed.spatial_shard.core_slices
-            patch_size = model_distributed.patch_size
-            pos_embed = model.pos_embed.reshape(
-                1,
-                model.patch_embed.h,
-                model.patch_embed.w,
-                model.embed_dim,
-            )
-            model_distributed.pos_embed.copy_(
-                pos_embed[
-                    :,
-                    h_slice.start // patch_size : h_slice.stop // patch_size,
-                    w_slice.start // patch_size : w_slice.stop // patch_size,
-                ]
-            )
-            for block, block_distributed in zip(model.blocks, model_distributed.blocks):
-                self._copy_mlp_weights(block.mlp, block_distributed.mlp)
-                self._copy_attn_weights(block.attn, block_distributed.attn)
-                # copy norm weights
-                block_distributed.norm1.weight.copy_(block.norm1.weight)
-                block_distributed.norm1.bias.copy_(block.norm1.bias)
-                block_distributed.norm2.weight.copy_(block.norm2.weight)
-                block_distributed.norm2.bias.copy_(block.norm2.bias)
-            # copy head weights
-            model_distributed.norm.weight.copy_(model.norm.weight)
-            model_distributed.norm.bias.copy_(model.norm.bias)
-            model_distributed.head.weight.copy_(model.head.weight)
-
-    @parameterized.expand(
-        [
-            [4, 128, 128, 8, 4, 512, 8, 2, 1e-2],
-            [4, 360, 720, 8, 20, 512, 8, 2, 1e-2],
-        ]
+def build_models(model_name, height, width, patch_size, channels, embed, heads, depth):
+    """Build matching serial/distributed models and this rank's spatial shard."""
+    mesh = (
+        comm.get_size("sp1"),
+        comm.get_rank("sp1"),
+        comm.get_size("sp2"),
+        comm.get_rank("sp2"),
     )
+    if model_name == "vit":
+        kwargs = dict(
+            img_size=(height, width),
+            patch_size=patch_size,
+            in_chans=channels,
+            out_chans=channels,
+            embed_dim=embed,
+            depth=depth,
+            num_heads=heads,
+            qkv_bias=True,
+        )
+        shard = make_vit_spatial_shard(
+            (height, width), patch_size, *mesh, "tp-sp1-sp2-dp"
+        )
+        return (
+            VisionTransformer(**kwargs),
+            DistributedVisionTransformer(**kwargs, spatial_shard=shard),
+            shard,
+        )
+    if model_name == "swin":
+        window_size = (4, 4)
+        kwargs = dict(
+            img_size=(height, width),
+            patch_size=patch_size,
+            window_size=window_size,
+            in_chans=channels,
+            out_chans=channels,
+            embed_dim=embed,
+            depth=depth,
+            num_heads=heads,
+            qkv_bias=True,
+        )
+        shard = make_swin_spatial_shard(
+            (height, width), patch_size, window_size, *mesh, "tp-sp1-sp2-dp"
+        )
+        return (
+            SwinTransformer(**kwargs),
+            DistributedSwinTransformer(**kwargs, spatial_shard=shard),
+            shard,
+        )
+
+    kwargs = dict(
+        img_size=(height, width),
+        in_chans=channels,
+        out_chans=channels,
+        embed_dim=embed,
+        depth=depth,
+        modes_kh=min(12, height),
+        modes_kw=min(17, width // 2 + 1),
+    )
+    shard = make_grid_spatial_shard((height, width), *mesh)
+    return FourierNeuralOperator(**kwargs), DistributedFNO(**kwargs), shard
+
+
+def gather_field(tensor, shard):
+    tensor = allgather_forward_split_backward(
+        tensor, -1, shard.w_splits, "sp2"
+    )
+    tensor = allgather_forward_split_backward(
+        tensor, -2, shard.h_splits, "sp1"
+    )
+    return allgather_forward_split_backward(tensor, 0, None, "dp")
+
+
+def error_metrics(actual, expected):
+    """Return the worst relative L2 and absolute errors across all ranks."""
+    difference = actual.detach() - expected.detach()
+    denominator = expected.detach().norm().clamp_min(
+        torch.finfo(expected.real.dtype).tiny
+    )
+    metrics = torch.tensor(
+        [
+            (difference.norm() / denominator).item(),
+            difference.abs().max().item(),
+        ],
+        dtype=torch.float64,
+        device=actual.device,
+    )
+    dist.all_reduce(metrics, op=dist.ReduceOp.MAX)
+    return metrics[0].item(), metrics[1].item()
+
+
+class TestDistributedModel(DistributedTestCase):
+    """End-to-end serial equivalence for the model selected by TEST_MODEL."""
+
+    @parameterized.expand(CASES[MODEL])
     def test_distributed_model(
         self,
-        batch,
-        H,
-        W,
+        _case_name,
+        batch_per_dp,
+        height,
+        width,
         patch_size,
-        chans,
+        channels,
         embed,
         heads,
         depth,
         tolerance,
     ):
-        #############################################################
-        # non-distributed op
-        #############################################################
-        # Temporarily remove parallel groups for the non-distributed version.
-        old_groups = {}
-        comm_groups = list(comm._COMM_GROUPS.keys())
-        for old_group in comm_groups:
-            old_groups[old_group] = comm._COMM_GROUPS.pop(old_group, None)
-        model = VisionTransformer(
-            img_size=[H, W],
-            patch_size=patch_size,
-            in_chans=chans,
-            out_chans=chans,
-            embed_dim=embed,
-            depth=depth,
-            num_heads=heads,
-            qkv_bias=True,
-        ).to(self.device)
-        model.zero_grad(set_to_none=True)
+        batch = batch_per_dp * comm.get_size("dp")
+        reference, model, shard = build_models(
+            MODEL, height, width, patch_size, channels, embed, heads, depth
+        )
+        reference = reference.to(self.device)
+        model = model.to(self.device)
 
-        # create tensor in BHWC format
+        # Rank zero defines the reference weights; metadata selects every local shard.
+        with torch.no_grad():
+            for parameter in reference.parameters():
+                dist.broadcast(parameter, src=0)
+        copy_reference_parameters(reference, model, shard)
+        init_params_for_shared_weights(model)
+
+        torch.manual_seed(5678)
         inp = torch.randn(
-            (batch, chans, H, W),
-            dtype=torch.float32,
-            device=self.device,
+            batch, channels, height, width, device=self.device, requires_grad=True
         )
-        tar = torch.randn(
-            (batch, chans, H, W),
-            dtype=torch.float32,
-            device=self.device,
+        target = torch.randn_like(inp)
+        output = reference(inp)
+        (output - target).square().mean().backward()
+
+        device_ids = [self.device.index] if self.device.type == "cuda" else None
+        ddp_model = init_ddp_model_and_reduction_hooks(
+            model,
+            device_ids=device_ids,
+            output_device=self.device.index if device_ids else None,
         )
-        inp.requires_grad = True
-        # if you use fp16, don't forget about the gradscalers (not impl in this test)
-        # autocast_dtype = torch.bfloat16
-        autocast_dtype = torch.float32
-        # forward pass
-        with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
-            out = model(inp)
-            loss = mse_loss(out, tar, (H, W))
-        loss.backward()
-        non_dist_grads = self._get_flattened_grads(model)
-
-        inp_grad = inp.grad.clone()
-
-        #############################################################
-        # distributed op
-        #############################################################
-        # restore groups for distributed version
-        for group_name, group in old_groups.items():
-            if group is not None:
-                comm._COMM_GROUPS[group_name] = group
-
-        spatial_shard = make_vit_spatial_shard(
-            (H, W),
-            patch_size,
-            comm.get_size("sp1"),
-            comm.get_rank("sp1"),
-            comm.get_size("sp2"),
-            comm.get_rank("sp2"),
-            "sp1-sp2-tp-dp",
-        )
-        model_distributed = DistributedVisionTransformer(
-            img_size=[H, W],
-            patch_size=patch_size,
-            in_chans=chans,
-            out_chans=chans,
-            embed_dim=embed,
-            depth=depth,
-            num_heads=heads,
-            qkv_bias=True,
-            spatial_shard=spatial_shard,
-        ).to(self.device)
-        model_distributed.zero_grad(set_to_none=True)
-
-        # sync the weights
-        self._copy_vit_weights(model, model_distributed)
-        init_params_for_shared_weights(model_distributed)
-        model_distributed = init_ddp_model_and_reduction_hooks(
-            model_distributed,
-            device_ids=[self.local_rank],
-            output_device=self.device,
-        )
-
-        # forward pass
         with torch.no_grad():
-            # dp split that dataloaders take care of usually
-            inp_local = split_forward_allgather_backward(
-                inp, dim=0, shapes=None, comm_name="dp"
+            local_inp = split_forward_allgather_backward(
+                inp.detach(), 0, None, "dp"
             )
-            tar_local = split_forward_allgather_backward(
-                tar, dim=0, shapes=None, comm_name="dp"
+            local_target = split_forward_allgather_backward(
+                target, 0, None, "dp"
             )
-            h_slice, w_slice = spatial_shard.core_slices
-            inp_local = inp_local[..., h_slice, w_slice]
-            tar_local = tar_local[..., h_slice, w_slice]
-        inp_local.requires_grad = True
+            h_slice, w_slice = shard.core_slices
+            local_inp = local_inp[..., h_slice, w_slice].clone()
+            local_target = local_target[..., h_slice, w_slice]
+        local_inp.requires_grad_(True)
 
-        with torch.autocast(device_type=inp.device.type, dtype=autocast_dtype):
-            out_local = model_distributed(inp_local)
-            loss = mse_loss(out_local, tar_local, (H, W))
+        local_output = ddp_model(local_inp)
+        mse_loss(local_output, local_target, (height, width)).backward()
 
-        loss.backward()
-        inp_grad_local = inp_local.grad.clone()
+        gathered_output = gather_field(local_output.detach(), shard)
+        output_relative, output_absolute = error_metrics(gathered_output, output)
+        if comm.get_world_rank() == 0:
+            print(
+                f"{MODEL}/{_case_name} output: "
+                f"relative L2={output_relative:.6e}, "
+                f"max absolute={output_absolute:.6e}"
+            )
+        self.assertLessEqual(
+            output_relative,
+            tolerance,
+            f"output relative L2 error {output_relative:.6e} exceeds {tolerance:.6e}",
+        )
 
-        ############################################################
-        # evaluate forward pass
-        ############################################################
-        with torch.no_grad():
-            # compute error over spatial dimensions
-            out_spatial = allgather_forward_split_backward(
-                out_local,
-                dim=-1,
-                shapes=spatial_shard.w_splits,
-                comm_name="sp2",
+        gathered_input_grad = (
+            gather_field(local_inp.grad, shard) / comm.get_size("dp")
+        )
+        input_relative, input_absolute = error_metrics(
+            gathered_input_grad, inp.grad
+        )
+        if comm.get_world_rank() == 0:
+            print(
+                f"{MODEL}/{_case_name} input gradients: "
+                f"relative L2={input_relative:.6e}, "
+                f"max absolute={input_absolute:.6e}"
             )
-            out_spatial = allgather_forward_split_backward(
-                out_spatial,
-                dim=-2,
-                shapes=spatial_shard.h_splits,
-                comm_name="sp1",
-            )
-            out_gather = allgather_forward_split_backward(
-                out_spatial, dim=0, shapes=None, comm_name="dp"
-            )
-            err = torch.mean(
-                torch.norm(out - out_gather, p=2, dim=(1, 2, 3))
-                / torch.norm(out, p=2, dim=(1, 2, 3))
-            )
-            if self.print_to_screen:
-                print(f"final relative error of output in model: {err.item()}")
-        self.assertTrue(err.item() <= tolerance)
+        self.assertLessEqual(
+            input_relative,
+            tolerance,
+            f"input-gradient relative L2 error {input_relative:.6e} "
+            f"exceeds {tolerance:.6e}",
+        )
 
-        #############################################################
-        # evaluate backward pass
-        #############################################################
-        with torch.no_grad():
-            inp_grad_spatial = allgather_forward_split_backward(
-                inp_grad_local,
-                dim=-1,
-                shapes=spatial_shard.w_splits,
-                comm_name="sp2",
-            )
-            inp_grad_spatial = allgather_forward_split_backward(
-                inp_grad_spatial,
-                dim=-2,
-                shapes=spatial_shard.h_splits,
-                comm_name="sp1",
-            )
-            inp_grad_gather = allgather_forward_split_backward(
-                inp_grad_spatial, dim=0, shapes=None, comm_name="dp"
-            ) / comm.get_size("dp")
-            err = torch.mean(
-                torch.norm(inp_grad - inp_grad_gather, p=2, dim=(1, 2, 3))
-                / torch.norm(inp_grad, p=2, dim=(1, 2, 3))
-            )
-            if self.print_to_screen:
-                print(f"final relative error of input gradients in model: {err.item()}")
-        self.assertTrue(err.item() <= tolerance)
-        #############################################################
-        # evaluate wgrads
-        #############################################################
-        dist_grads_full = self._get_reconstructed_grads(model_distributed.module)
-        # Compare with the non-distributed gradients
-        grad_diff = non_dist_grads - dist_grads_full
-        err = grad_diff.norm().item() / non_dist_grads.norm().item()
-        if self.print_to_screen:
-            print(f"final relative error of weight gradients: {err}")
-
-        self.assertTrue(err <= tolerance)
+        assert_reference_gradients(
+            self,
+            reference,
+            ddp_model.module,
+            shard,
+            tolerance=tolerance,
+            print_summary=comm.get_world_rank() == 0,
+        )
 
 
 if __name__ == "__main__":

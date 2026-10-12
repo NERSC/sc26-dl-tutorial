@@ -1,12 +1,154 @@
 import torch
 import os
 import datetime as dt
+import math
 import unittest
 
 import torch.distributed as dist
 
 from distributed.helpers import compute_split_shapes, _split
 from utils import comm
+
+
+def _reference_parameter_view(name, parameter, distributed_parameter, spatial_shard):
+    """Put a serial parameter in the distributed model's global layout."""
+    if (
+        parameter.ndim == 4
+        and parameter.shape[-2:] == (1, 1)
+        and distributed_parameter.ndim == 2
+    ):
+        return parameter[..., 0, 0]
+    if (
+        name == "pos_embed"
+        and parameter.ndim == 3
+        and distributed_parameter.ndim == 4
+    ):
+        if spatial_shard is None:
+            raise ValueError("spatial_shard is required for a flattened pos_embed")
+        height, width = spatial_shard.global_shape
+        patch_area = height * width // parameter.shape[1]
+        patch_size = math.isqrt(patch_area)
+        if patch_size * patch_size != patch_area:
+            raise ValueError(f"{name}: cannot infer a square patch size")
+        return parameter.reshape(
+            1, height // patch_size, width // patch_size, parameter.shape[-1]
+        )
+    return parameter
+
+
+def local_parameter_slice(name, parameter, distributed_parameter, spatial_shard=None):
+    """Return this rank's shard of a serial parameter using ``comm_metadata``."""
+    parameter = _reference_parameter_view(
+        name, parameter, distributed_parameter, spatial_shard
+    )
+    metadata = distributed_parameter.comm_metadata
+    if parameter.ndim != len(metadata["sharded"]):
+        raise ValueError(
+            f"{name}: reference rank {parameter.ndim} does not match sharding "
+            f"metadata {metadata['sharded']}"
+        )
+
+    slices = [slice(None)] * parameter.ndim
+    for dim, group_name in enumerate(metadata["sharded"]):
+        if group_name is None:
+            continue
+        splits = compute_split_shapes(
+            parameter.shape[dim], comm.get_size(group_name)
+        )
+        rank = comm.get_rank(group_name)
+        start = sum(splits[:rank])
+        slices[dim] = slice(start, start + splits[rank])
+    result = parameter[tuple(slices)]
+    if result.shape != distributed_parameter.shape:
+        raise ValueError(
+            f"{name}: metadata produced shape {tuple(result.shape)}, expected "
+            f"{tuple(distributed_parameter.shape)}"
+        )
+    return result
+
+
+def copy_reference_parameters(reference, distributed_model, spatial_shard=None):
+    """Copy a serial model into the corresponding distributed parameter shards."""
+    reference_parameters = dict(reference.named_parameters())
+    distributed_parameters = dict(distributed_model.named_parameters())
+    if reference_parameters.keys() != distributed_parameters.keys():
+        missing = reference_parameters.keys() - distributed_parameters.keys()
+        extra = distributed_parameters.keys() - reference_parameters.keys()
+        raise ValueError(
+            f"parameter names differ; missing={sorted(missing)}, extra={sorted(extra)}"
+        )
+    with torch.no_grad():
+        for name, parameter in distributed_parameters.items():
+            parameter.copy_(
+                local_parameter_slice(
+                    name,
+                    reference_parameters[name],
+                    parameter,
+                    spatial_shard,
+                )
+            )
+
+
+def assert_reference_gradients(
+    testcase,
+    reference,
+    distributed_model,
+    spatial_shard=None,
+    tolerance=1e-3,
+    print_summary=False,
+):
+    """Compare gradients and return aggregate relative and absolute errors."""
+    reference_parameters = dict(reference.named_parameters())
+    maximum_absolute_error = 0.0
+    squared_difference = 0.0
+    squared_reference = 0.0
+    metric_device = None
+    for name, parameter in distributed_model.named_parameters():
+        testcase.assertIsNotNone(parameter.grad, f"{name}: missing distributed gradient")
+        testcase.assertIsNotNone(
+            reference_parameters[name].grad, f"{name}: missing reference gradient"
+        )
+        expected = local_parameter_slice(
+            name,
+            reference_parameters[name].grad,
+            parameter,
+            spatial_shard,
+        )
+        difference = parameter.grad - expected
+        absolute_error = difference.abs().max().item()
+        squared_difference += difference.abs().square().sum().item()
+        squared_reference += expected.abs().square().sum().item()
+        maximum_absolute_error = max(maximum_absolute_error, absolute_error)
+        metric_device = parameter.device
+
+    squared_norms = torch.tensor(
+        [squared_difference, squared_reference],
+        dtype=torch.float64,
+        device=metric_device,
+    )
+    dist.all_reduce(squared_norms, op=dist.ReduceOp.SUM)
+    absolute = torch.tensor(
+        maximum_absolute_error, dtype=torch.float64, device=metric_device
+    )
+    dist.all_reduce(absolute, op=dist.ReduceOp.MAX)
+    relative_error = math.sqrt(squared_norms[0].item()) / max(
+        math.sqrt(squared_norms[1].item()), torch.finfo(torch.float32).tiny
+    )
+    maximum_absolute_error = absolute.item()
+    if print_summary:
+        print(
+            "parameter gradients: "
+            f"relative L2={relative_error:.6e}, "
+            f"max absolute={maximum_absolute_error:.6e}"
+        )
+
+    testcase.assertLessEqual(
+        relative_error,
+        tolerance,
+        f"parameter-gradient relative L2 error {relative_error:.6e} "
+        f"exceeds {tolerance:.6e}",
+    )
+    return relative_error, maximum_absolute_error
 
 def copy_mlp_weights(mlp_layer, mlp_layer_distributed):
     """copy the weights of mlp into the correct shard of mlp_dist"""
