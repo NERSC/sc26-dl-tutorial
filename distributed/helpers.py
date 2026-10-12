@@ -264,3 +264,68 @@ def _transpose(tensor, dim0, dim1, dim1_split_sizes, comm_name):
         dist.all_to_all(x_recv, x_send, group=group)
 
     return x_recv, dim0_split_sizes
+
+
+def _distributed_roll(input_, shift, dim, comm_name):
+    """Roll a tensor axis sharded over ``comm_name`` using neighbor exchange."""
+    if dim < 0:
+        dim += input_.dim()
+    if dim < 0 or dim >= input_.dim():
+        raise ValueError(
+            f"roll dim {dim} is invalid for rank-{input_.dim()} tensor"
+        )
+    comm_size = comm.get_size(comm_name)
+    if shift == 0:
+        return input_
+    if comm_size == 1:
+        return torch.roll(input_, shifts=shift, dims=dim)
+
+    local_length = input_.shape[dim]
+    width = abs(shift)
+    if width > local_length:
+        raise ValueError(
+            f"roll width {width} exceeds local dim {dim} size {local_length}"
+        )
+
+    comm_rank = comm.get_rank(comm_name)
+    left = (comm_rank - 1) % comm_size
+    right = (comm_rank + 1) % comm_size
+    send_indices = [slice(None)] * input_.dim()
+    if shift > 0:
+        send_indices[dim] = slice(-width, None)
+        send_peer, recv_peer = right, left
+    else:
+        send_indices[dim] = slice(0, width)
+        send_peer, recv_peer = left, right
+
+    permutation = [dim] + [
+        index for index in range(input_.dim()) if index != dim
+    ]
+    inverse_permutation = [0] * input_.dim()
+    for index, value in enumerate(permutation):
+        inverse_permutation[value] = index
+
+    send_buffer = (
+        input_[tuple(send_indices)].permute(permutation).contiguous()
+    )
+    recv_buffer = torch.empty_like(send_buffer)
+    input_splits = [0] * comm_size
+    output_splits = [0] * comm_size
+    input_splits[send_peer] = width
+    output_splits[recv_peer] = width
+    dist.all_to_all_single(
+        recv_buffer,
+        send_buffer,
+        output_split_sizes=output_splits,
+        input_split_sizes=input_splits,
+        group=comm.get_group(comm_name),
+    )
+    recv_buffer = recv_buffer.permute(inverse_permutation).contiguous()
+
+    rolled = torch.roll(input_, shifts=shift, dims=dim)
+    keep = [slice(None)] * input_.dim()
+    if shift > 0:
+        keep[dim] = slice(width, None)
+        return torch.cat((recv_buffer, rolled[tuple(keep)]), dim=dim)
+    keep[dim] = slice(None, -width)
+    return torch.cat((rolled[tuple(keep)], recv_buffer), dim=dim)

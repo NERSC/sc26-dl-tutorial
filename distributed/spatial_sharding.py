@@ -108,3 +108,43 @@ def make_grid_spatial_shard(
         h_rank=sp1_rank,
         w_rank=sp2_rank,
     )
+
+
+def make_swin_spatial_shard(
+    global_shape: Sequence[int],
+    patch_size: int,
+    window_size: Sequence[int],
+    sp1_size: int,
+    sp1_rank: int,
+    sp2_size: int,
+    sp2_rank: int,
+    order: str,
+) -> MeshSpatialShard:
+    """Partition a Swin grid and require complete local attention windows."""
+    if len(window_size) != 2:
+        raise ValueError("window_size must contain height and width")
+    shard = make_vit_spatial_shard(
+        global_shape=global_shape,
+        patch_size=patch_size,
+        sp1_size=sp1_size,
+        sp1_rank=sp1_rank,
+        sp2_size=sp2_size,
+        sp2_rank=sp2_rank,
+        order=order,
+    )
+    window_h, window_w = map(int, window_size)
+    if window_h <= 0 or window_w <= 0:
+        raise ValueError("window dimensions must be positive")
+    patch_rows = tuple(size // patch_size for size in shard.h_splits)
+    patch_cols = tuple(size // patch_size for size in shard.w_splits)
+    if any(size % window_h for size in patch_rows):
+        raise ValueError(
+            f"local patch-row splits {patch_rows} are not divisible by "
+            f"window height {window_h}"
+        )
+    if any(size % window_w for size in patch_cols):
+        raise ValueError(
+            f"local patch-column splits {patch_cols} are not divisible by "
+            f"window width {window_w}"
+        )
+    return shard
