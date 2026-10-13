@@ -70,8 +70,11 @@ def test_spatial_objectives_match_single_rank_objectives():
 
 def _write_synthetic_data(tmp_path):
     fields = np.arange(5 * 2 * 8 * 6, dtype=np.float32).reshape(5, 2, 8, 6)
-    with h5py.File(tmp_path / "synthetic_0000.h5", "w") as h5f:
-        h5f.create_dataset("fields", data=fields)
+    for file_index in range(2):
+        with h5py.File(
+            tmp_path / f"trajectory_{file_index:04d}.h5", "w"
+        ) as h5f:
+            h5f.create_dataset("fields", data=fields)
     with h5py.File(tmp_path / "stats.h5", "w") as h5f:
         h5f.create_dataset("mean", data=np.zeros(2, dtype=np.float32))
         h5f.create_dataset("std", data=np.ones(2, dtype=np.float32))
@@ -115,7 +118,6 @@ def test_dali_external_source_local_and_full_reads_match(tmp_path):
     def make_source(read_mode):
         return SynES(
             str(tmp_path),
-            ["0000"],
             False,
             1,
             1,
@@ -143,7 +145,6 @@ def test_spatial_peers_read_different_cores_of_the_same_sample(tmp_path):
     def make_source(spatial_rank):
         return SynES(
             str(tmp_path),
-            ["0000"],
             False,
             1,
             1,

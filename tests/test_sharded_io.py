@@ -91,7 +91,7 @@ class TestShardedIO(DistributedTestCase):
             data_dir = tempfile.mkdtemp()
             rng = np.random.default_rng(0)
             for f in range(4):
-                with h5py.File(Path(data_dir) / f"synthetic_{f:04d}.h5", "w") as h:
+                with h5py.File(Path(data_dir) / f"trajectory_{f:04d}.h5", "w") as h:
                     h["fields"] = rng.standard_normal((5, 4, 40, 70)).astype(np.float32)
             with h5py.File(Path(data_dir) / "stats.h5", "w") as h:
                 h["mean"] = np.zeros(4, dtype=np.float32)
@@ -119,7 +119,7 @@ class TestShardedIO(DistributedTestCase):
                 self.iteration = self.idx_in_epoch = i
                 self.epoch_idx = 0
 
-        args = (data_dir, ["0003"], False, 1, 1, img_size, 4, 4, 1, 0, None)
+        args = (data_dir, False, 1, 1, img_size, 4, 4, 1, 0, None)
         es_full = SynES(*args, enable_logging=False)
         es_tile = SynES(*args, spatial_shard=shard, spatial_read_mode=read_mode, enable_logging=False)
         for i in (0, 3):

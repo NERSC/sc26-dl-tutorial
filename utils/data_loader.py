@@ -1,6 +1,5 @@
 import glob
 import logging
-from pathlib import Path
 
 import h5py
 import numpy as np
@@ -61,16 +60,11 @@ class SynDataset(Dataset):
         self.limit_nsamples = (
             params.limit_nsamples if train else params.limit_nsamples_val
         )
-        valid_files = {f"synthetic_{file_id}.h5" for file_id in params.valid_files}
-        all_files = sorted(glob.glob(f"{data_path}/synthetic_*.h5"))
-        if train:
-            self.files_paths = [
-                path for path in all_files if Path(path).name not in valid_files
-            ]
-        else:
-            self.files_paths = [
-                path for path in all_files if Path(path).name in valid_files
-            ]
+        all_files = sorted(glob.glob(f"{data_path}/trajectory_*.h5"))
+        split_index = int(0.9 * len(all_files))
+        self.files_paths = (
+            all_files[:split_index] if train else all_files[split_index:]
+        )
         if not self.files_paths:
             raise FileNotFoundError(f"No {'training' if train else 'validation'} files")
 

@@ -26,11 +26,10 @@ base: &base
   data_loader_config: 'pytorch'
   num_data_workers: 0 # number of dataloader worker threads per proc
   spatial_read_mode: 'all' # choices: local, all
-  n_in_channels: 4
-  n_out_channels: 4
+  n_in_channels: 2
+  n_out_channels: 2
   data_path: '/data'
-  stats_path: '/data/stats.h5'
-  valid_files: ['0014', '0015']
+  stats_path: '/data/stats_trajectory.h5'
   limit_nsamples: None
   limit_nsamples_val: None
 
