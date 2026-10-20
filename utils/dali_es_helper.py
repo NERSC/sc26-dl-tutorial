@@ -1,5 +1,6 @@
 import glob
 import logging
+import os
 
 import h5py
 import numpy as np
@@ -45,9 +46,17 @@ class SynES:
         self.shuffle = train
 
     def _get_files_stats(self, enable_logging):
+        if not os.path.isdir(self.data_path):
+            raise FileNotFoundError(
+                f"Data directory does not exist: {self.data_path}"
+            )
         all_files = sorted(
             glob.glob(f"{self.data_path}/trajectory_*.h5")
         )
+        if not all_files:
+            raise FileNotFoundError(
+                f"No trajectory_*.h5 files found in {self.data_path}"
+            )
         split_index = int(0.9 * len(all_files))
         self.files_paths = (
             all_files[:split_index]

@@ -1,5 +1,6 @@
 import glob
 import logging
+import os
 
 import h5py
 import numpy as np
@@ -60,7 +61,15 @@ class SynDataset(Dataset):
         self.limit_nsamples = (
             params.limit_nsamples if train else params.limit_nsamples_val
         )
+        if not os.path.isdir(data_path):
+            raise FileNotFoundError(
+                f"Data directory does not exist: {data_path}"
+            )
         all_files = sorted(glob.glob(f"{data_path}/trajectory_*.h5"))
+        if not all_files:
+            raise FileNotFoundError(
+                f"No trajectory_*.h5 files found in {data_path}"
+            )
         split_index = int(0.9 * len(all_files))
         self.files_paths = (
             all_files[:split_index] if train else all_files[split_index:]
