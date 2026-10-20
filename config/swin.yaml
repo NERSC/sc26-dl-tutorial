@@ -1,0 +1,75 @@
+base: &base
+
+  # Model config
+  network: 'swin'
+  embed_dim: 384
+  depth: 12
+  dropout: 0.0
+  patch_size: 64
+  window_size: [16, 16]
+  num_heads: 16
+  model_backend: 'pytorch'
+
+  # Training config
+  img_size: [4096, 4096]
+  dt: 1
+  global_batch_size: 16
+  num_iters: 30000
+  amp_mode: none
+  enable_fused: false
+  enable_jit: false
+  expdir: '/logs'
+  lr_schedule: 'cosine'
+  lr: 5E-4
+  warmup: 0
+  optimizer: 'Adam'
+
+  # Data
+  data_loader_config: 'pytorch'
+  num_data_workers: 0
+  spatial_read_mode: 'all'
+  n_in_channels: 2
+  n_out_channels: 2
+  data_path: '/data'
+  stats_path: '/data/stats_trajectory.h5'
+  limit_nsamples: None
+  limit_nsamples_val: None
+
+  # Comms
+  wireup_info: env
+  wireup_store: tcp
+
+short: &short_ls
+  <<: *base
+  limit_nsamples: 512
+  limit_nsamples_val: 128
+  num_iters: 128
+
+short_opt:
+  <<: *short_ls
+  data_loader_config: 'dali'
+  num_data_workers: 8
+  amp_mode: fp16
+  enable_jit: true
+  enable_fused: true
+
+opt: &opt
+  <<: *base
+  data_loader_config: 'dali'
+  num_data_workers: 8
+  amp_mode: fp16
+  num_iters: 30000
+  enable_jit: true
+  enable_fused: true
+
+mp:
+  <<: *base
+  num_iters: 30000
+  global_batch_size: 16
+  lr: 1e-3
+  num_data_workers: 2
+  embed_dim: 1024
+  data_loader_config: 'dali'
+  amp_mode: fp16
+  enable_jit: false
+  enable_fused: true

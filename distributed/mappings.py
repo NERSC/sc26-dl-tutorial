@@ -4,6 +4,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from utils import comm
 from distributed.helpers import (
+    _distributed_roll,
     _gather,
     _reduce,
     _reduce_scatter,
@@ -164,6 +165,32 @@ def distributed_transpose(input_, dims, shapes, comm_name):
     return _DistributedTranspose.apply(input_, dims, shapes, comm_name)
 
 
+class _RollForwardReverseRollBackward(torch.autograd.Function):
+    @staticmethod
+    def forward(input_, shifts_, dims_, comm_names_):
+        if not (len(shifts_) == len(dims_) == len(comm_names_)):
+            raise ValueError("shifts, dims, and comm_names must have equal length")
+        output = input_
+        for shift, dim, comm_name in zip(shifts_, dims_, comm_names_):
+            output = _distributed_roll(output, shift, dim, comm_name)
+        return output
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        _, ctx.shifts, ctx.dims, ctx.comm_names = inputs
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_input = grad_output
+        for shift, dim, comm_name in reversed(
+            tuple(zip(ctx.shifts, ctx.dims, ctx.comm_names))
+        ):
+            grad_input = _distributed_roll(
+                grad_input, -shift, dim, comm_name
+            )
+        return grad_input, None, None, None
+
+
 @torch.compiler.disable
 def identity_forward_allreduce_backward(input_, comm_name):
     return _IdentityForwardAllReduceBackward.apply(input_, comm_name)
@@ -207,6 +234,15 @@ def allgather_forward_reducescatter_backward(
 ):
     return _AllGatherForwardReduceScatterBackward.apply(
         input_, dim, shapes, comm_name
+    )
+
+
+@torch.compiler.disable
+def roll_forward_reverseroll_backward(
+    input_, shifts, dims, comm_names
+):
+    return _RollForwardReverseRollBackward.apply(
+        input_, tuple(shifts), tuple(dims), tuple(comm_names)
     )
 
 

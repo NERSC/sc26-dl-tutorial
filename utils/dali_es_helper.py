@@ -1,6 +1,6 @@
 import glob
 import logging
-from pathlib import Path
+import os
 
 import h5py
 import numpy as np
@@ -10,7 +10,6 @@ class SynES:
     def __init__(
         self,
         data_path,
-        valid_files,
         train,
         batch_size,
         dt,
@@ -27,7 +26,6 @@ class SynES:
     ):
         self.batch_size = batch_size
         self.data_path = data_path
-        self.valid_files = {f"synthetic_{file_id}.h5" for file_id in valid_files}
         self.img_size = img_size
         self.train = train
         self.step = int(dt)
@@ -48,15 +46,23 @@ class SynES:
         self.shuffle = train
 
     def _get_files_stats(self, enable_logging):
-        all_files = sorted(glob.glob(f"{self.data_path}/synthetic_*.h5"))
-        if self.train:
-            self.files_paths = [
-                path for path in all_files if Path(path).name not in self.valid_files
-            ]
-        else:
-            self.files_paths = [
-                path for path in all_files if Path(path).name in self.valid_files
-            ]
+        if not os.path.isdir(self.data_path):
+            raise FileNotFoundError(
+                f"Data directory does not exist: {self.data_path}"
+            )
+        all_files = sorted(
+            glob.glob(f"{self.data_path}/trajectory_*.h5")
+        )
+        if not all_files:
+            raise FileNotFoundError(
+                f"No trajectory_*.h5 files found in {self.data_path}"
+            )
+        split_index = int(0.9 * len(all_files))
+        self.files_paths = (
+            all_files[:split_index]
+            if self.train
+            else all_files[split_index:]
+        )
         if not self.files_paths:
             raise FileNotFoundError(
                 f"No {'training' if self.train else 'validation'} files"

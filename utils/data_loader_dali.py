@@ -37,7 +37,6 @@ class SynDaliDataLoader:
             inp, tar = fn.external_source(
                 source=esh.SynES(
                     self.data_path,
-                    self.valid_files,
                     self.train,
                     self.batch_size,
                     self.dt,
@@ -93,7 +92,6 @@ class SynDaliDataLoader:
         self.batch_size = int(params.local_batch_size)
 
         self.data_path = data_path
-        self.valid_files = params.valid_files
         self.train = train
         self.dt = params.dt
         self.n_in_channels = params.n_in_channels
@@ -123,7 +121,6 @@ class SynDaliDataLoader:
 
         extsource = esh.SynES(
             self.data_path,
-            self.valid_files,
             self.train,
             self.batch_size,
             self.dt,

@@ -18,7 +18,18 @@ from utils import get_data_loader_distributed
 from utils.loss import mse_loss
 from utils.metrics import rmse
 from utils.plots import generate_images
-from networks import vit, fno
+from networks import fno, swin, vit
+
+
+def build_model(params):
+    network = params.get("network", params.get("model", "vit")).lower()
+    if network == "vit":
+        return vit.ViT(params)
+    if network == "swin":
+        return swin.Swin(params)
+    if network == "fno":
+        return fno.FNO(params)
+    raise ValueError(f"unknown network {network!r}")
 
 
 def train(params, writer, local_rank, world_rank, world_size):
@@ -38,10 +49,7 @@ def train(params, writer, local_rank, world_rank, world_size):
     logging.info("rank %d, data loader initialized" % (world_rank))
 
     # create model
-    if params.get("network", "vit") == "fno":
-        model = fno.FNO(params).to(device)
-    else:
-        model = vit.ViT(params).to(device)
+    model = build_model(params).to(device)
     if params.enable_jit:
         model = torch.compile(model)
 

@@ -23,8 +23,11 @@ from utils import get_data_loader_distributed
 from utils import comm
 from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
-from distributed.spatial_sharding import make_vit_spatial_shard
-from networks import vit_mp
+from distributed.spatial_sharding import (
+    make_swin_spatial_shard,
+    make_vit_spatial_shard,
+)
+from networks import swin_mp, vit_mp
 
 from distributed.mappings import (
     allgather_forward_split_backward,
@@ -33,6 +36,17 @@ from distributed.mappings import (
 from distributed.helpers import init_params_for_shared_weights
 
 from utils.plots import generate_images
+
+
+def build_model(params, spatial_shard):
+    network = params.get("network", params.get("model", "vit")).lower()
+    if network == "vit":
+        return vit_mp.ViT(params, spatial_shard=spatial_shard)
+    if network == "swin":
+        if params.model_backend != "pytorch":
+            raise ValueError("Swin only supports the pytorch backend")
+        return swin_mp.Swin(params, spatial_shard=spatial_shard)
+    raise ValueError(f"unknown network {network!r}")
 
 
 def capture_model(
@@ -140,7 +154,7 @@ def train(
     logging.info('rank %d, data loader initialized'%(world_rank))
 
     # create model
-    model = vit_mp.ViT(params, spatial_shard=spatial_shard).to(device)
+    model = build_model(params, spatial_shard).to(device)
 
     if params.enable_jit:
         model = torch.compile(model)
@@ -512,15 +526,22 @@ if __name__ == '__main__':
     # for data loader, set the actual number of data shards and id
     params.data_num_shards = comm.get_size("dp")
     params.data_shard_id = comm.get_rank("dp")
-    spatial_shard = make_vit_spatial_shard(
-        global_shape=params.img_size,
-        patch_size=params.patch_size,
-        sp1_size=comm.get_size("sp1"),
-        sp1_rank=comm.get_rank("sp1"),
-        sp2_size=comm.get_size("sp2"),
-        sp2_rank=comm.get_rank("sp2"),
-        order=params.get("order", "tp-sp1-sp2-dp"),
-    )
+    shard_kwargs = {
+        "global_shape": params.img_size,
+        "patch_size": params.patch_size,
+        "sp1_size": comm.get_size("sp1"),
+        "sp1_rank": comm.get_rank("sp1"),
+        "sp2_size": comm.get_size("sp2"),
+        "sp2_rank": comm.get_rank("sp2"),
+        "order": params.get("order", "tp-sp1-sp2-dp"),
+    }
+    if params.get("network", params.get("model", "vit")).lower() == "swin":
+        spatial_shard = make_swin_spatial_shard(
+            window_size=params.window_size,
+            **shard_kwargs,
+        )
+    else:
+        spatial_shard = make_vit_spatial_shard(**shard_kwargs)
 
     # Set up directory
     baseDir = params.expdir
