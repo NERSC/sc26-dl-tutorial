@@ -53,24 +53,18 @@ def init_params_for_shared_weights(model):
 
 
 # distributed primitives
-# helper routine to compute uneven splitting in balanced way:
 def compute_split_shapes(size, num_chunks):
-    # treat trivial case first
-    if num_chunks == 1:
-        return [size]
+    """Split ``size`` into balanced, non-empty chunks ordered by rank."""
+    if num_chunks <= 0:
+        raise ValueError(f"num_chunks must be positive, got {num_chunks}")
+    if size < num_chunks:
+        raise ValueError(
+            f"Cannot split {size} elements into {num_chunks} chunks; "
+            "every chunk must be non-empty"
+        )
 
-    # first, check if we can split using div-up to balance the load:
-    chunk_size = (size + num_chunks - 1) // num_chunks
-    last_chunk_size = max(0, size - chunk_size * (num_chunks - 1))
-    if last_chunk_size == 0:
-        # in this case, the last shard would be empty, split with floor instead:
-        chunk_size = size // num_chunks
-        last_chunk_size = size - chunk_size * (num_chunks - 1)
-
-    # generate sections list
-    sections = [chunk_size for _ in range(num_chunks - 1)] + [last_chunk_size]
-
-    return sections
+    base, remainder = divmod(size, num_chunks)
+    return [base + 1] * remainder + [base] * (num_chunks - remainder)
 
 
 def _reduce(input_, comm_name):
@@ -298,16 +292,7 @@ def _distributed_roll(input_, shift, dim, comm_name):
         send_indices[dim] = slice(0, width)
         send_peer, recv_peer = left, right
 
-    permutation = [dim] + [
-        index for index in range(input_.dim()) if index != dim
-    ]
-    inverse_permutation = [0] * input_.dim()
-    for index, value in enumerate(permutation):
-        inverse_permutation[value] = index
-
-    send_buffer = (
-        input_[tuple(send_indices)].permute(permutation).contiguous()
-    )
+    send_buffer = input_[tuple(send_indices)].movedim(dim, 0).contiguous()
     recv_buffer = torch.empty_like(send_buffer)
     input_splits = [0] * comm_size
     output_splits = [0] * comm_size
@@ -320,7 +305,7 @@ def _distributed_roll(input_, shift, dim, comm_name):
         input_split_sizes=input_splits,
         group=comm.get_group(comm_name),
     )
-    recv_buffer = recv_buffer.permute(inverse_permutation).contiguous()
+    recv_buffer = recv_buffer.movedim(0, dim).contiguous()
 
     rolled = torch.roll(input_, shifts=shift, dims=dim)
     keep = [slice(None)] * input_.dim()

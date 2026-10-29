@@ -9,6 +9,7 @@ from utils.dali_es_helper import SynES
 from utils.data_loader import SynDataset
 from utils.loss import mse_loss
 from utils.metrics import rmse, rmse_spatial
+from distributed.helpers import compute_split_shapes
 from distributed.spatial_sharding import (
     make_swin_spatial_shard,
     make_vit_spatial_shard,
@@ -20,6 +21,15 @@ class Params(SimpleNamespace):
         return getattr(self, name, default)
 
 
+def test_compute_split_shapes_is_balanced_and_nonempty():
+    assert compute_split_shapes(10, 4) == [3, 3, 2, 2]
+    assert compute_split_shapes(12, 4) == [3, 3, 3, 3]
+    with pytest.raises(ValueError, match="every chunk must be non-empty"):
+        compute_split_shapes(3, 4)
+    with pytest.raises(ValueError, match="must be positive"):
+        compute_split_shapes(3, 0)
+
+
 def test_vit_policy_splits_patch_rows_and_preserves_token_order():
     shards = [
         make_vit_spatial_shard(
@@ -28,10 +38,10 @@ def test_vit_policy_splits_patch_rows_and_preserves_token_order():
         for sp2_rank in range(3)
         for sp1_rank in range(4)
     ]
-    assert shards[0].h_splits == (100, 100, 100, 60)
+    assert shards[0].h_splits == (100, 100, 80, 80)
     assert shards[0].w_splits == (240, 240, 240)
-    assert shards[0].token_splits == (60, 60, 60, 36) * 3
-    assert shards[-1].core_slices == (slice(300, 360), slice(480, 720))
+    assert shards[0].token_splits == (60, 60, 48, 48) * 3
+    assert shards[-1].core_slices == (slice(280, 360), slice(480, 720))
 
 
 def test_vit_policy_rejects_partial_patches():
