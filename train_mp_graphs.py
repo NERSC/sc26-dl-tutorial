@@ -73,7 +73,7 @@ def capture_model(
         local_height,
         local_width,
     )
-    
+
     # no zeros because loss is rel loss
     static_input = torch.randn(inp_shape, dtype=torch.float32, device=device)
     static_label = torch.randn(tar_shape, dtype=torch.float32, device=device)
@@ -93,7 +93,7 @@ def capture_model(
 
         # sync here
         capture_stream.synchronize()
-        
+
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -158,7 +158,7 @@ def train(
 
     if params.enable_jit:
         model = torch.compile(model)
-    
+
     if params.amp_dtype == torch.float16: 
         scaler = GradScaler()
     else:
@@ -181,7 +181,7 @@ def train(
         logging.info(model)
         all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (1024. * 1024. * 1024.)
         logging.info(f"Scaffolding memory high watermark: {all_mem_gb} GB.")
-            
+
     if params.enable_fused:
         optimizer = optim.Adam(model.parameters(), lr = params.lr, fused=True, betas=(0.9, 0.95))
     else:
@@ -275,41 +275,36 @@ def train(
                 if (epoch == 3 and i == len(train_data_loader) - 1):
                     torch.cuda.profiler.stop()
 
-            torch.cuda.nvtx.range_push(f"step {i}")
-            iters += 1
-            dat_start = time.time()
-            torch.cuda.nvtx.range_push(f"data copy in {i}")
+            with torch.cuda.nvtx.range(f"step {i}"):
+                iters += 1
+                dat_start = time.time()
+                with torch.cuda.nvtx.range(f"data copy in {i}"):
+                    inp, tar = map(lambda x: x.to(device), data)
 
-            inp, tar = map(lambda x: x.to(device), data)
-            torch.cuda.nvtx.range_pop() # copy in
+                tr_start = time.time()
+                b_size = inp.size(0)
 
-            tr_start = time.time()
-            b_size = inp.size(0)
-            
-            static_input.copy_(inp)
-            static_label.copy_(tar)
-            graph.replay()
+                static_input.copy_(inp)
+                static_label.copy_(tar)
+                graph.replay()
 
-            if world_rank == 0 and i == 1:
-                all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (1024. * 1024. * 1024.)
-                logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
+                if world_rank == 0 and i == 1:
+                    all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (1024. * 1024. * 1024.)
+                    logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
 
-            if params.amp_dtype == torch.float16:
-                torch.cuda.nvtx.range_push(f"optimizer")
-                scaler.step(optimizer)
-                torch.cuda.nvtx.range_pop() # optimizer
-                scaler.update()
-            else:
-                torch.cuda.nvtx.range_push(f"optimizer")
-                optimizer.step()
-                torch.cuda.nvtx.range_pop() # optimizer
+                if params.amp_dtype == torch.float16:
+                    with torch.cuda.nvtx.range(f"optimizer"):
+                        scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    with torch.cuda.nvtx.range(f"optimizer"):
+                        optimizer.step()
 
 
-            if params.distributed:
-                torch.distributed.all_reduce(static_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
-            tr_loss.append(static_loss.detach().item())
+                if params.distributed:
+                    torch.distributed.all_reduce(static_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
+                tr_loss.append(static_loss.detach().item())
 
-            torch.cuda.nvtx.range_pop() # step
             # lr step
             scheduler.step()
 
@@ -466,7 +461,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
- 
+
     run_num = args.run_num
 
     params = YParams(os.path.abspath(args.yaml_config), args.config)
@@ -488,7 +483,7 @@ if __name__ == '__main__':
 
     if args.data_loader_config:
         params.update({"data_loader_config" : args.data_loader_config})
-    
+
     if args.num_iters:
         params.update({"num_iters" : args.num_iters})
 

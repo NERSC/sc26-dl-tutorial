@@ -4,6 +4,7 @@ import os
 
 import h5py
 import numpy as np
+import torch
 
 
 class SynES:
@@ -28,6 +29,7 @@ class SynES:
         self.data_path = data_path
         self.img_size = img_size
         self.train = train
+        self.nvtx_prefix = "data/train" if train else "data/valid"
         self.step = int(dt)
         self.n_in_channels = n_in_channels
         self.n_out_channels = n_out_channels
@@ -107,6 +109,7 @@ class SynES:
             if f is not None:
                 f.close()
 
+    @torch.cuda.nvtx.range("data/dali_sample")
     def __call__(self, sample_info):
         if sample_info.iteration >= self.num_steps_per_epoch:
             raise StopIteration
@@ -124,8 +127,9 @@ class SynES:
         sample_idx = self.index_permutation[sample_info.idx_in_epoch]
         file_index, local_idx = divmod(sample_idx, self.samples_per_file)
         if self.files[file_index] is None:
-            self.files[file_index] = h5py.File(self.files_paths[file_index], "r")
-            self.dsets[file_index] = self.files[file_index]["fields"]
+            with torch.cuda.nvtx.range("data/open_file"):
+                self.files[file_index] = h5py.File(self.files_paths[file_index], "r")
+                self.dsets[file_index] = self.files[file_index]["fields"]
 
         if self.spatial_shard is None:
             local_shape = (self.img_shape_x, self.img_shape_y)
@@ -147,24 +151,26 @@ class SynES:
 
         fields = self.dsets[file_index]
         if self.spatial_read_mode == "local":
-            fields.read_direct(
-                self.inp_buf,
-                source_sel=np.s_[
-                    local_idx,
-                    : self.n_in_channels,
-                    h_slice,
-                    w_slice,
-                ],
-            )
-            fields.read_direct(
-                self.tar_buf,
-                source_sel=np.s_[
-                    local_idx + self.step,
-                    : self.n_out_channels,
-                    h_slice,
-                    w_slice,
-                ],
-            )
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/read_input"):
+                fields.read_direct(
+                    self.inp_buf,
+                    source_sel=np.s_[
+                        local_idx,
+                        : self.n_in_channels,
+                        h_slice,
+                        w_slice,
+                    ],
+                )
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/read_target"):
+                fields.read_direct(
+                    self.tar_buf,
+                    source_sel=np.s_[
+                        local_idx + self.step,
+                        : self.n_out_channels,
+                        h_slice,
+                        w_slice,
+                    ],
+                )
         else:
             if self.full_buf is None:
                 self.full_buf = np.empty(
@@ -175,31 +181,34 @@ class SynES:
                     ),
                     dtype=np.float32,
                 )
-            fields.read_direct(
-                self.full_buf[: self.n_in_channels],
-                source_sel=np.s_[
-                    local_idx,
-                    : self.n_in_channels,
-                    : self.img_shape_x,
-                    : self.img_shape_y,
-                ],
-            )
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/read_input"):
+                fields.read_direct(
+                    self.full_buf[: self.n_in_channels],
+                    source_sel=np.s_[
+                        local_idx,
+                        : self.n_in_channels,
+                        : self.img_shape_x,
+                        : self.img_shape_y,
+                    ],
+                )
             self.inp_buf[...] = self.full_buf[
                 : self.n_in_channels, h_slice, w_slice
             ]
-            fields.read_direct(
-                self.full_buf[: self.n_out_channels],
-                source_sel=np.s_[
-                    local_idx + self.step,
-                    : self.n_out_channels,
-                    : self.img_shape_x,
-                    : self.img_shape_y,
-                ],
-            )
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/read_target"):
+                fields.read_direct(
+                    self.full_buf[: self.n_out_channels],
+                    source_sel=np.s_[
+                        local_idx + self.step,
+                        : self.n_out_channels,
+                        : self.img_shape_x,
+                        : self.img_shape_y,
+                    ],
+                )
             self.tar_buf[...] = self.full_buf[
                 : self.n_out_channels, h_slice, w_slice
             ]
 
         # DALI consumes samples asynchronously, so each result needs independent
         # storage that will not be overwritten by the next call.
-        return self.inp_buf.copy(), self.tar_buf.copy()
+        with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/copy_outputs"):
+            return self.inp_buf.copy(), self.tar_buf.copy()
