@@ -112,11 +112,10 @@ def train(params, writer, local_rank, world_rank, world_size):
         model.train()
         step_count = 0
         for i, data in enumerate(profiled_batches(train_data_loader, "train"), 0):
-            if world_rank == 0:
-                if epoch == 3 and i == 0:
-                    torch.cuda.profiler.start()
-                if epoch == 3 and i == len(train_data_loader) - 1:
-                    torch.cuda.profiler.stop()
+            if epoch == 3 and i == 0:
+                torch.cuda.profiler.start()
+            if epoch == 3 and i == len(train_data_loader) - 1:
+                torch.cuda.profiler.stop()
 
             with torch.cuda.nvtx.range(f"step {i}"):
                 iters += 1
