@@ -17,7 +17,7 @@ warnings.simplefilter("ignore", FutureWarning)
 
 logging_utils.config_logger()
 from utils.YParams import YParams
-from utils import get_data_loader_distributed
+from utils import get_data_loader_distributed, profiled_batches
 from utils import comm
 from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
@@ -182,46 +182,40 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
         model.train()
         step_count = 0
 
-        for i, data in enumerate(train_data_loader, 0):
-            if world_rank == 0:
-                if epoch == 3 and i == 0:
-                    torch.cuda.profiler.start()
-                if epoch == 3 and i == len(train_data_loader) - 1:
-                    torch.cuda.profiler.stop()
+        for i, data in enumerate(profiled_batches(train_data_loader, "train"), 0):
+            if epoch == 3 and i == 0:
+                torch.cuda.profiler.start()
+            if epoch == 3 and i == len(train_data_loader) - 1:
+                torch.cuda.profiler.stop()
 
-            torch.cuda.nvtx.range_push(f"step {i}")
-            iters += 1
-            torch.cuda.nvtx.range_push(f"data copy in {i}")
+            with torch.cuda.nvtx.range(f"step {i}"):
+                iters += 1
+                with torch.cuda.nvtx.range(f"data copy in {i}"):
+                    inp, tar = map(lambda x: x.to(device), data)
 
-            inp, tar = map(lambda x: x.to(device), data)
-            torch.cuda.nvtx.range_pop()  # copy in
+                optimizer.zero_grad(set_to_none=True)
 
-            optimizer.zero_grad(set_to_none=True)
+                with torch.cuda.nvtx.range(f"forward"):
+                    with autocast("cuda", dtype=torch.bfloat16):
+                        gen = model(inp)
+                        loss = loss_func(gen, tar)
 
-            torch.cuda.nvtx.range_push(f"forward")
-            with autocast("cuda", dtype=torch.bfloat16):
-                gen = model(inp)
-                loss = loss_func(gen, tar)
-            torch.cuda.nvtx.range_pop()  # forward
+                if world_rank == 0 and i == 1:  # print the mem used
+                    all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (
+                        1024.0 * 1024.0 * 1024.0
+                    )
+                    logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
 
-            if world_rank == 0 and i == 1:  # print the mem used
-                all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (
-                    1024.0 * 1024.0 * 1024.0
-                )
-                logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
+                loss.backward()
+                with torch.cuda.nvtx.range(f"optimizer"):
+                    optimizer.step()
 
-            loss.backward()
-            torch.cuda.nvtx.range_push(f"optimizer")
-            optimizer.step()
-            torch.cuda.nvtx.range_pop()  # optimizer
+                if params.distributed:
+                    torch.distributed.all_reduce(
+                        loss, op=ReduceOp.AVG, group=comm.get_group("dp")
+                    )
+                tr_loss.append(loss.detach().item())
 
-            if params.distributed:
-                torch.distributed.all_reduce(
-                    loss, op=ReduceOp.AVG, group=comm.get_group("dp")
-                )
-            tr_loss.append(loss.detach().item())
-
-            torch.cuda.nvtx.range_pop()  # step
             # lr step
             scheduler.step()
 
@@ -263,7 +257,7 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
 
         with torch.inference_mode():
             with torch.no_grad():
-                for i, data in enumerate(val_data_loader, 0):
+                for i, data in enumerate(profiled_batches(val_data_loader, "valid"), 0):
                     with autocast("cuda", dtype=torch.bfloat16):
                         inp, tar = map(lambda x: x.to(device), data)
                         gen = model(inp)

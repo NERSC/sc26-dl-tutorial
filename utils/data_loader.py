@@ -10,7 +10,8 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 def worker_init(_worker_id):
-    np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
+    with torch.cuda.nvtx.range("data/worker_init"):
+        np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
 
 
 def get_data_loader(
@@ -48,6 +49,7 @@ def get_data_loader(
 
 class SynDataset(Dataset):
     def __init__(self, params, data_path, train, spatial_shard=None):
+        self.nvtx_prefix = "data/train" if train else "data/valid"
         self.step = int(params.dt)
         self.n_in_channels = params.n_in_channels
         self.n_out_channels = params.n_out_channels
@@ -160,14 +162,21 @@ class SynDataset(Dataset):
         return output
 
     def __getitem__(self, global_idx):
-        file_index, local_idx = divmod(global_idx, self.samples_per_file)
-        if self.files[file_index] is None:
-            self._open_file(file_index)
-        fields = self.files[file_index]
+        with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/getitem"):
+            file_index, local_idx = divmod(global_idx, self.samples_per_file)
+            if self.files[file_index] is None:
+                with torch.cuda.nvtx.range("data/open_file"):
+                    self._open_file(file_index)
+            fields = self.files[file_index]
 
-        inp = self._read_field(fields, local_idx, self.n_in_channels)
-        tar = self._read_field(
-            fields, local_idx + self.step, self.n_out_channels
-        )
-
-        return self._normalize(inp), self._normalize(tar)
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/read_input"):
+                inp = self._read_field(fields, local_idx, self.n_in_channels)
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/read_target"):
+                tar = self._read_field(
+                    fields, local_idx + self.step, self.n_out_channels
+                )
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/normalize_input"):
+                inp = self._normalize(inp)
+            with torch.cuda.nvtx.range(f"{self.nvtx_prefix}/normalize_target"):
+                tar = self._normalize(tar)
+            return inp, tar

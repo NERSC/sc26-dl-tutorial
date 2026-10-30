@@ -24,8 +24,8 @@ export HDF5_USE_FILE_LOCKING=FALSE
 # Profiling
 if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     echo "Enabling profiling..."
-    NSYS_ARGS="--trace=cuda,cublas,nvtx --kill none -c cudaProfilerApi -f true"
-    NSYS_OUTPUT=${LOGDIR}/${PROFILE_OUTPUT:-"profile"}
+    NSYS_ARGS="--trace=cuda,cublas,nvtx --kill none -c cudaProfilerApi -f true --trace-fork-before-exec=true"
+    NSYS_OUTPUT=${LOGDIR}/${PROFILE_OUTPUT:-"profile"}.%q{SLURM_PROCID}
     export PROFILE_CMD="nsys profile $NSYS_ARGS -o $NSYS_OUTPUT"
 fi
 
