@@ -220,7 +220,7 @@ To generate a profile using our scripts on Perlmutter, run the following command
 ```
 ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 -t 20 submit_pm.sh --config=short
 ```
-This command will run four epochs of the training script, profiling only the last epoch run. It will produce a file `baseline.nsys-rep` that can be opened in the Nsight System's program. The arg `--trace=cuda,nvtx` is optional and is used here to disable OS Runtime tracing for speed. The arg `-c cudaProfilerApi` instructs the profiler to only profile the duration of the runtime between the `torch.cuda.profiler.start()` and `torch.cuda.profiler.stop()` calls.
+This command will run four epochs of the training script, profiling only the last epoch run. It will produce `${LOGDIR}/baseline.0.nsys-rep` that can be opened in the Nsight System's program. All three submission scripts append the Slurm rank to `PROFILE_OUTPUT` (default: `profile`), so each rank writes a separate report. They also enable `--trace-fork-before-exec=true` to capture forked PyTorch worker processes. The arg `--trace=cuda,nvtx` is optional and is used here to disable OS Runtime tracing for speed. The arg `-c cudaProfilerApi` instructs the profiler to only profile the duration of the runtime between the `torch.cuda.profiler.start()` and `torch.cuda.profiler.stop()` calls.
 
 To view the profile, download (copy) the generated profile (this will be in your log directory in your scratch) to your local computer and open it in Nsight Systems.
 Loading this profile ([`baseline.nsys-rep`](sample_nsys_profiles/baseline.nsys-rep)) in Nsight Systems will look like this:
