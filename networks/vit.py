@@ -109,9 +109,11 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        y = self.attn(self.norm1(x))
-        x = x + self.drop_path(y)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        with torch.cuda.nvtx.range("attention"):
+            y = self.attn(self.norm1(x))
+            x = x + self.drop_path(y)
+        with torch.cuda.nvtx.range("mlp"):
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
 
@@ -233,13 +235,15 @@ class VisionTransformer(nn.Module):
         return x
 
     def forward(self, x):
-        x = self.prepare_tokens(x)
+        with torch.cuda.nvtx.range("embed"):
+            x = self.prepare_tokens(x)
 
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
 
-        x = self.forward_head(x)
+        with torch.cuda.nvtx.range("head"):
+            x = self.forward_head(x)
         return x
 
 

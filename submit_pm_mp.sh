@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task 32
 #SBATCH --gpus-per-node 4
 #SBATCH --time=01:00:00
-#SBATCH --image=nersc/pytorch:25.06.01
-#SBATCH --module=gpu,nccl-plugin
+#SBATCH --image=nersc/pytorch:26.07.01
+#SBATCH --module=gpu,nccl-cu13-plugin
 #SBATCH -J vit-era5-mp
 #SBATCH -o %x-%j.out
 
@@ -39,5 +39,6 @@ srun -u shifter -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
     --env PYTHONUSERBASE=${LOGDIR} \
     bash -c "
     source export_DDP_vars.sh
+    unset NCCL_NET_PLUGIN
     ${PROFILE_CMD} python train_mp.py ${args}
     "

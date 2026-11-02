@@ -122,6 +122,8 @@ def init_process_group():
     port = int(os.getenv("MASTER_PORT", 0))
     master_address = os.getenv("MASTER_ADDR")
     local_rank = int(os.getenv("LOCAL_RANK", 0))
+    device = torch.device("cuda", local_rank)
+    torch.cuda.set_device(device)
 
     with disable_logging():
         # create tcp store
@@ -135,7 +137,11 @@ def init_process_group():
 
         # initialize process groups
         dist.init_process_group(
-            backend="nccl", rank=world_rank, world_size=world_size, store=store
+            backend="nccl",
+            rank=world_rank,
+            world_size=world_size,
+            store=store,
+            device_id=device,
         )
 
 
