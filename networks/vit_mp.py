@@ -276,8 +276,10 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        x = x + self.drop_path(self.attn(self.norm1(x)))
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        with torch.cuda.nvtx.range("attention"):
+            x = x + self.drop_path(self.attn(self.norm1(x)))
+        with torch.cuda.nvtx.range("mlp"):
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
 
@@ -440,11 +442,13 @@ class VisionTransformer(nn.Module):
         )
 
     def forward(self, x):
-        x = self.prepare_tokens(x)
+        with torch.cuda.nvtx.range("embed"):
+            x = self.prepare_tokens(x)
         for block in self.blocks:
             x = block(x)
         x = self.norm(x)
-        return self.forward_head(x)
+        with torch.cuda.nvtx.range("head"):
+            return self.forward_head(x)
 
 
 def ViT(params, spatial_shard, **kwargs):
