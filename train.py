@@ -5,7 +5,7 @@ import argparse
 
 import torch
 import torch.optim as optim
-from torch.amp import autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.parallel import DistributedDataParallel
 
@@ -62,8 +62,19 @@ def train(params, writer, local_rank, world_rank, world_size):
         model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
     )
 
+    amp_mode = str(params.get("amp_mode", "none")).lower()
+    if amp_mode not in {"none", "fp16", "bf16"}:
+        raise ValueError(f"amp_mode must be 'none', 'fp16', or 'bf16', got {amp_mode!r}")
+    amp_enabled = amp_mode != "none"
+    amp_dtype = torch.float16 if amp_mode == "fp16" else torch.bfloat16
+    grad_scaler = GradScaler("cuda", enabled=amp_mode == "fp16")
+
     if world_rank == 0:
         logging.info(model)
+        logging.info(
+            "Parameter count: %.3f M",
+            sum(parameter.numel() for parameter in model.parameters()) / 1e6,
+        )
 
     warmup_steps = 100
     lr_scale = lambda step: min(
@@ -82,7 +93,7 @@ def train(params, writer, local_rank, world_rank, world_size):
     # Log initial loss on train and validation to tensorboard
     with torch.no_grad():
         inp, tar = map(lambda x: x.to(device), next(iter(train_data_loader)))
-        with autocast("cuda", dtype=torch.bfloat16):
+        with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
             gen = model(inp)
             tr_loss = loss_func(gen, tar)
             inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
@@ -125,13 +136,14 @@ def train(params, writer, local_rank, world_rank, world_size):
                 optimizer.zero_grad(set_to_none=True)
 
                 with torch.cuda.nvtx.range(f"forward"):
-                    with autocast("cuda", dtype=torch.bfloat16):
+                    with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
                         gen = model(inp)
                         loss = loss_func(gen, tar)
 
-                loss.backward()
+                grad_scaler.scale(loss).backward()
                 with torch.cuda.nvtx.range(f"optimizer"):
-                    optimizer.step()
+                    grad_scaler.step(optimizer)
+                    grad_scaler.update()
 
                 if params.distributed:
                     torch.distributed.all_reduce(loss)
@@ -175,7 +187,7 @@ def train(params, writer, local_rank, world_rank, world_size):
         with torch.inference_mode():
             with torch.no_grad():
                 for i, data in enumerate(profiled_batches(val_data_loader, "valid"), 0):
-                    with autocast("cuda", dtype=torch.bfloat16):
+                    with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
                         inp, tar = map(lambda x: x.to(device), data)
                         gen = model(inp)
                         val_loss += loss_func(gen, tar)
@@ -242,9 +254,15 @@ if __name__ == "__main__":
     world_rank = 0
     local_rank = 0
     if params.distributed:
-        torch.distributed.init_process_group(backend="nccl", init_method="env://")
-        world_rank = torch.distributed.get_rank()
         local_rank = int(os.environ["LOCAL_RANK"])
+        device = torch.device("cuda", local_rank)
+        torch.cuda.set_device(device)
+        torch.distributed.init_process_group(
+            backend="nccl",
+            init_method="env://",
+            device_id=device,
+        )
+        world_rank = torch.distributed.get_rank()
 
     assert params.global_batch_size % world_size == 0, (
         f"global_batch_size ({params.global_batch_size}) must be divisible by "

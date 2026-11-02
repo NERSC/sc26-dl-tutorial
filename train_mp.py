@@ -6,7 +6,7 @@ import pynvml
 
 import torch
 import torch.optim as optim
-from torch.amp import autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributed import ReduceOp
 
@@ -105,8 +105,19 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
         model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
     )
 
+    amp_mode = str(params.get("amp_mode", "none")).lower()
+    if amp_mode not in {"none", "fp16", "bf16"}:
+        raise ValueError(f"amp_mode must be 'none', 'fp16', or 'bf16', got {amp_mode!r}")
+    amp_enabled = amp_mode != "none"
+    amp_dtype = torch.float16 if amp_mode == "fp16" else torch.bfloat16
+    grad_scaler = GradScaler("cuda", enabled=amp_mode == "fp16")
+
     if world_rank == 0:
         logging.info(model)
+        logging.info(
+            "Local parameter count: %.3f M",
+            sum(parameter.numel() for parameter in model.parameters()) / 1e6,
+        )
         all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (
             1024.0 * 1024.0 * 1024.0
         )
@@ -145,11 +156,11 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
     # Log initial loss on train and validation to tensorboard
     with torch.no_grad():
         inp, tar = map(lambda x: x.to(device), next(iter(train_data_loader)))
-        with autocast("cuda", dtype=torch.bfloat16):
+        with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
             gen = model(inp)
         tr_loss = loss_func(gen, tar)
         inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
-        with autocast("cuda", dtype=torch.bfloat16):
+        with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
             gen = model(inp)
         val_loss = loss_func(gen, tar)
         val_rmse = metric_func(gen, tar)
@@ -182,12 +193,10 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
         model.train()
         step_count = 0
 
+        if epoch == 3:
+            torch.cuda.profiler.start()
+            torch.cuda.nvtx.range_push("train_epoch")
         for i, data in enumerate(profiled_batches(train_data_loader, "train"), 0):
-            if epoch == 3 and i == 0:
-                torch.cuda.profiler.start()
-            if epoch == 3 and i == len(train_data_loader) - 1:
-                torch.cuda.profiler.stop()
-
             with torch.cuda.nvtx.range(f"step {i}"):
                 iters += 1
                 with torch.cuda.nvtx.range(f"data copy in {i}"):
@@ -196,7 +205,7 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
                 optimizer.zero_grad(set_to_none=True)
 
                 with torch.cuda.nvtx.range(f"forward"):
-                    with autocast("cuda", dtype=torch.bfloat16):
+                    with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
                         gen = model(inp)
                         loss = loss_func(gen, tar)
 
@@ -206,9 +215,10 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
                     )
                     logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
 
-                loss.backward()
+                grad_scaler.scale(loss).backward()
                 with torch.cuda.nvtx.range(f"optimizer"):
-                    optimizer.step()
+                    grad_scaler.step(optimizer)
+                    grad_scaler.update()
 
                 if params.distributed:
                     torch.distributed.all_reduce(
@@ -222,30 +232,9 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
             step_count += 1
 
         torch.cuda.synchronize()  # device sync to ensure accurate epoch timings
+        if epoch == 3:
+            torch.cuda.nvtx.range_pop()  # train_epoch
         end = time.time()
-
-        plot_fields = [
-            gather_field(field)
-            for field in (inp, tar, gen)
-        ]
-        if world_rank == 0:
-            iters_per_sec = step_count / (end - start)
-            samples_per_sec = params["global_batch_size"] * iters_per_sec
-            logging.info(
-                "Time taken for epoch %i is %f sec, avg %f samples/sec",
-                epoch + 1,
-                end - start,
-                samples_per_sec,
-            )
-            logging.info("  Avg train loss=%f" % np.mean(tr_loss))
-            writer.add_scalar("Loss/train", np.mean(tr_loss), iters)
-            writer.add_scalar(
-                "Learning Rate", optimizer.param_groups[0]["lr"], iters
-            )
-            writer.add_scalar("Avg iters per sec", iters_per_sec, iters)
-            writer.add_scalar("Avg samples per sec", samples_per_sec, iters)
-            fig = generate_images(plot_fields)
-            writer.add_figure("Visualization, field_2", fig, iters, close=True)
 
         val_start = time.time()
         val_loss = torch.zeros(1, device=device)
@@ -255,15 +244,18 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
         valid_steps = 0
         model.eval()
 
+        if epoch == 3:
+            torch.cuda.nvtx.range_push("validation")
         with torch.inference_mode():
             with torch.no_grad():
                 for i, data in enumerate(profiled_batches(val_data_loader, "valid"), 0):
-                    with autocast("cuda", dtype=torch.bfloat16):
-                        inp, tar = map(lambda x: x.to(device), data)
-                        gen = model(inp)
-                        val_loss += loss_func(gen, tar)
-                        val_rmse += metric_func(gen, tar)
-                    valid_steps += 1
+                    with torch.cuda.nvtx.range(f"val step {i}"):
+                        with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
+                            inp, tar = map(lambda x: x.to(device), data)
+                            gen = model(inp)
+                            val_loss += loss_func(gen, tar)
+                            val_rmse += metric_func(gen, tar)
+                        valid_steps += 1
 
                 if params.distributed:
                     torch.distributed.all_reduce(
@@ -275,14 +267,47 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
 
         val_rmse /= valid_steps  # Avg validation rmse
         val_loss /= valid_steps
+        if epoch == 3:
+            torch.cuda.synchronize()
+            torch.cuda.nvtx.range_pop()  # validation
         val_end = time.time()
+
+        if epoch == 3:
+            torch.cuda.nvtx.range_push("plotting")
+        plot_fields = [
+            gather_field(field)
+            for field in (inp, tar, gen)
+        ]
         if world_rank == 0:
+            fig = generate_images(plot_fields)
+            writer.add_figure("Visualization, field_2", fig, iters, close=True)
+        if epoch == 3:
+            torch.cuda.synchronize()
+            torch.cuda.nvtx.range_pop()  # plotting
+            torch.cuda.profiler.stop()
+
+        if world_rank == 0:
+            iters_per_sec = step_count / (end - start)
+            samples_per_sec = params["global_batch_size"] * iters_per_sec
+            logging.info(
+                "Time taken for epoch %i is %f sec, avg %f samples/sec",
+                epoch + 1,
+                end - start,
+                samples_per_sec,
+            )
+            logging.info("  Avg train loss=%f" % np.mean(tr_loss))
             logging.info("  Avg val loss={}".format(val_loss.item()))
             logging.info("  Total validation time: {} sec".format(val_end - val_start))
+            writer.add_scalar("Loss/train", np.mean(tr_loss), iters)
             writer.add_scalar("Loss/valid", val_loss, iters)
             writer.add_scalar(
                 "RMSE(field_0)/valid", val_rmse.cpu().numpy()[0], iters
             )
+            writer.add_scalar(
+                "Learning Rate", optimizer.param_groups[0]["lr"], iters
+            )
+            writer.add_scalar("Avg iters per sec", iters_per_sec, iters)
+            writer.add_scalar("Avg samples per sec", samples_per_sec, iters)
             writer.flush()
 
     torch.cuda.synchronize()
@@ -432,6 +457,10 @@ if __name__ == "__main__":
         spatial_shard=spatial_shard,
     )
 
-    if params.distributed:
+    if torch.distributed.is_initialized() and world_size > 1:
         torch.distributed.barrier()
     logging.info("DONE ---- rank %d" % world_rank)
+    if writer is not None:
+        writer.close()
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
