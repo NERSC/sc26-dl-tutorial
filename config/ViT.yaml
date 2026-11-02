@@ -1,17 +1,17 @@
 base: &base
 
   # Model config
-  embed_dim: 384
+  embed_dim: 512
   depth: 12
   dropout: 0.0
-  patch_size: 64
+  patch_size: 32
   num_heads: 16
   model_backend: 'pytorch'
 
   # Training config
   img_size: [4096, 4096]
   dt: 1
-  global_batch_size: 16 # number of samples per training batch
+  global_batch_size: 4 # number of samples per training batch
   num_iters: 30000
   amp_mode: none
   enable_fused: false
@@ -40,43 +40,62 @@ base: &base
 # limit the number of samples
 short: &short_ls
   <<: *base
-  limit_nsamples: 512
-  limit_nsamples_val: 128
-  num_iters: 128
+  limit_nsamples: 64
+  limit_nsamples_val: 16
+  num_iters: 80
 
 # add optimization flags
 short_opt:
   <<: *short_ls
-  data_loader_config: 'dali'
-  num_data_workers: 8
-  amp_mode: fp16
+  data_loader_config: 'pytorch'
+  num_data_workers: 2
+  amp_mode: bf16
   enable_jit: true
   enable_fused: true
+
+short_opt_dali: &short_opt_dali
+  <<: *short_ls
+  data_loader_config: 'dali'
+  num_data_workers: 2
+  amp_mode: bf16
+  enable_jit: true
+  enable_fused: true
+
+short_opt_dali_dp:
+  <<: *short_opt_dali
+  global_batch_size: 16
+
+short_opt_big: &short_opt_big
+  <<: *short_ls
+  global_batch_size: 16
+  data_loader_config: 'dali'
+  num_data_workers: 2
+  amp_mode: bf16
+  enable_jit: true
+  enable_fused: true
+  patch_size: 16
+  embed_dim: 1024
 
 # no samples limits
-opt: &opt
-  <<: *base
-  data_loader_config: 'dali'
-  num_data_workers: 8
-  amp_mode: fp16
+opt_big: &opt_big
+  <<: *short_opt_big
   num_iters: 30000
-  enable_jit: true
-  enable_fused: true
 
 # Model parallel configs
-mp: &mp
-  <<: *base
-  num_iters: 30000
-  global_batch_size: 16
-  lr: 1e-3
+short_mp: &short_mp
+  <<: *short_opt_big
+  global_batch_size: 4
   num_data_workers: 2
-  embed_dim: 1024 # change to bigger model
+  patch_size: 16
+  embed_dim: 1536
+  depth: 16
   data_loader_config: 'dali'
-  amp_mode: fp16
+  amp_mode: bf16
   enable_jit: false
   enable_fused: true
 
-mp_te:
-  <<: *mp
+short_mp_te: &short_mp_te
+  <<: *short_mp
   model_backend: 'transformer-engine'
   enable_jit: false
+  enable_fused: true
