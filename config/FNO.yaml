@@ -16,7 +16,7 @@ base: &base
   dt: 1
   global_batch_size: 1 # one 4096x4096 sample needs ~20 GB at embed_dim 16, the mp config uses 8 over 16 GPUs
   num_iters: 30000
-  amp_mode: none
+  amp_mode: none # none or bf16; not fp16: its loss scaling cannot unscale the complex spectral weights
   enable_fused: false # fused Adam does not support the complex spectral weights
   enable_jit: false
   expdir: '/logs'
@@ -52,7 +52,7 @@ short_opt:
   <<: *short_ls
   data_loader_config: 'dali'
   num_data_workers: 8
-  amp_mode: fp16
+  amp_mode: bf16
   enable_jit: true
   enable_fused: false
 
@@ -61,7 +61,7 @@ opt: &opt
   <<: *base
   data_loader_config: 'dali'
   num_data_workers: 8
-  amp_mode: fp16
+  amp_mode: bf16
   num_iters: 30000
   enable_jit: true
   enable_fused: false
@@ -74,6 +74,6 @@ mp: &mp
   lr: 1e-3
   num_data_workers: 2
   data_loader_config: 'dali'
-  amp_mode: fp16
+  amp_mode: bf16
   enable_jit: false
   enable_fused: false

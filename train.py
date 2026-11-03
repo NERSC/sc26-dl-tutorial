@@ -65,6 +65,12 @@ def train(params, writer, local_rank, world_rank, world_size):
     amp_mode = str(params.get("amp_mode", "none")).lower()
     if amp_mode not in {"none", "fp16", "bf16"}:
         raise ValueError(f"amp_mode must be 'none', 'fp16', or 'bf16', got {amp_mode!r}")
+    if amp_mode == "fp16" and any(p.is_complex() for p in model.parameters()):
+        raise ValueError(
+            "amp_mode 'fp16' needs loss scaling, whose unscaling does not support complex parameters such as "
+            "the FNO's spectral weights (NotImplementedError in GradScaler.step); use amp_mode 'bf16', which "
+            "needs no scaling, or 'none'"
+        )
     amp_enabled = amp_mode != "none"
     amp_dtype = torch.float16 if amp_mode == "fp16" else torch.bfloat16
     grad_scaler = GradScaler("cuda", enabled=amp_mode == "fp16")
