@@ -14,13 +14,20 @@ from networks.fno_mp import FourierNeuralOperator as DistributedFNO
 class TestFNODDP(DistributedTestCase):
     """The FNO under the real DDP wrapper and gradient-reduction hooks, with dp > 1"""
 
-    @parameterized.expand([[(32, 64), 8, 2, 12, 9, 2.0], [(31, 62), 8, 1, None, None, 0.0]])
-    def test_ddp_grads_match_serial(self, img_size, embed, depth, kh, kw, mlp_ratio):
+    @parameterized.expand(
+        [
+            [(32, 64), 8, 2, 12, 9, 2.0],
+            [(31, 62), 8, 1, None, None, 0.0],
+            [(32, 64), 8, 2, 6, 5, 2.0, dict(downsample=2, lift_dim=8)],
+        ]
+    )
+    def test_ddp_grads_match_serial(self, img_size, embed, depth, kh, kw, mlp_ratio, extra=None):
+        extra = extra or {}
         dp = comm.get_size("dp")
         self.assertGreater(dp, 1, "run with a world size larger than tp*sp1*sp2")
 
-        serial = SerialFNO(img_size, 4, 3, embed, depth, kh, kw, mlp_ratio).to(self.device)
-        model = DistributedFNO(img_size, 4, 3, embed, depth, kh, kw, mlp_ratio).to(self.device)
+        serial = SerialFNO(img_size, 4, 3, embed, depth, kh, kw, mlp_ratio, **extra).to(self.device)
+        model = DistributedFNO(img_size, 4, 3, embed, depth, kh, kw, mlp_ratio, **extra).to(self.device)
         with torch.no_grad():
             for p in serial.parameters():
                 dist.broadcast(p, src=0)

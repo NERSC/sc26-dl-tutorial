@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from parameterized import parameterized
 
-from networks.fno import FourierNeuralOperatorLayer
+from networks.fno import FourierNeuralOperatorLayer, FourierResample
 from networks.helpers import _zero_self_conjugate_imag, rfft2_no_save, rfft_no_save
 
 
@@ -111,6 +111,12 @@ class TestSpectralLayersKeepNothingAtFullResolution(unittest.TestCase):
         # only the truncated spectrum, 2 x 8 x 16 x 16 complex = 32 KB of a 1 MB field (3%); the old code kept
         # an fp32 copy of the whole field and the complex field once more, about 2 x the input
         self.assertLess(kept, 0.05 * field, f"the layer keeps {kept / field:.2f} x the input field for backward")
+
+    @parameterized.expand([[(128, 128), (64, 64)], [(64, 64), (128, 128)]])
+    def test_resampling(self, in_size, out_size):
+        x = torch.randn(2, 8, *in_size, requires_grad=True)
+        kept, _ = saved_bytes(FourierResample(in_size, out_size), x)
+        self.assertLess(kept, 0.02 * max(x.numel() * 4, 2 * 8 * out_size[0] * out_size[1] * 4))
 
 
 if __name__ == "__main__":

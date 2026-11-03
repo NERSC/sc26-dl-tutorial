@@ -6,6 +6,7 @@ import torch.nn as nn
 
 from utils import comm
 from distributed.fft import DistributedRealFFT2, DistributedInverseRealFFT2
+from distributed.resample import DistributedFourierResample
 from networks.fno import init_pointwise_
 from networks.helpers import spectral_init_decay, spectral_wavenumbers
 from networks.vit_mp import MLP, ColumnParallelLinear, RowParallelLinear, _pointwise_linear
@@ -175,6 +176,10 @@ class FourierNeuralOperator(nn.Module):
     """
     Distributed Fourier neural operator, see networks/fno.py for the serial reference.
 
+    With ``downsample > 1`` the blocks run on a coarser latent grid, see the serial model for the layout; the
+    Fourier resampling is then a pencil FFT pair, and the widening and narrowing of the channels are replicated
+    pointwise layers (the spectral layers need all channels local, so ``embed_dim`` is not tensor-parallel there).
+
     Spatially sharded at its interface, like the ViT: every model-parallel rank takes its own
     (B, in_chans, H/sp1, W/sp2) shard as input, as loaded by the data loader from the same
     ``distributed.spatial_sharding.make_grid_spatial_shard`` shard, and returns its own
@@ -194,20 +199,39 @@ class FourierNeuralOperator(nn.Module):
         modes_kw=None,
         mlp_ratio=2.0,
         spectral_init_k0=None,
+        downsample=1,
+        lift_dim=None,
+        resample_skip=True,
         **kwargs,
     ):
         super().__init__()
         self.img_size = tuple(img_size)
         height, width = self.img_size
+        if downsample < 1 or height % downsample or width % downsample:
+            raise ValueError(f"downsample={downsample} must be a positive integer dividing the image size {self.img_size}")
+        self.downsample = downsample
+        self.latent_size = (height // downsample, width // downsample)
+        lift_dim = lift_dim if lift_dim is not None else (embed_dim if downsample == 1 else 16)
+        self.resample_skip = resample_skip and downsample > 1
 
-        self.lift = MLP(in_chans, embed_dim, embed_dim, layout="channels_first")
+        self.lift = MLP(in_chans, lift_dim, lift_dim, layout="channels_first")
+        if downsample > 1:
+            # the pencil FFTs of the resampling swap the channel dim with h and w, so lift_dim is split too
+            for group in ("sp1", "sp2"):
+                if lift_dim < comm.get_size(group):
+                    raise ValueError(f"lift_dim={lift_dim} must be at least {group}={comm.get_size(group)}, the resampling splits the channels over that group")
+            self.down = DistributedFourierResample(self.img_size, self.latent_size)
+            self.up = DistributedFourierResample(self.latent_size, self.img_size)
+        if lift_dim != embed_dim:
+            self.expand = PointwiseLinear(lift_dim, embed_dim)
+            self.reduce = PointwiseLinear(embed_dim, lift_dim)
         self.blocks = nn.ModuleList(
             [
-                Block(embed_dim, height, width, modes_kh=modes_kh, modes_kw=modes_kw, mlp_ratio=mlp_ratio, init_k0=spectral_init_k0)
+                Block(embed_dim, *self.latent_size, modes_kh=modes_kh, modes_kw=modes_kw, mlp_ratio=mlp_ratio, init_k0=spectral_init_k0)
                 for _ in range(depth)
             ]
         )
-        self.project = MLP(embed_dim, embed_dim, out_chans, layout="channels_first")
+        self.project = MLP(lift_dim, lift_dim, out_chans, layout="channels_first")
 
         # The tensor-parallel layers are the ViT's, which initialize with a constant std of 0.02. That is
         # right at the ViT's width of ~1024 but vanishes the signal at the FNO's width, so use the same
@@ -225,8 +249,19 @@ class FourierNeuralOperator(nn.Module):
 
     def forward(self, x):
         x = self.lift(x)
+        skip = x if self.resample_skip else None
+        if self.downsample > 1:
+            x = self.down(x)
+        if hasattr(self, "expand"):
+            x = self.expand(x)
         for block in self.blocks:
             x = block(x)
+        if hasattr(self, "reduce"):
+            x = self.reduce(x)
+        if self.downsample > 1:
+            x = self.up(x)
+        if skip is not None:
+            x = x + skip
         return self.project(x)
 
 
@@ -241,5 +276,8 @@ def FNO(params, **kwargs):
         modes_kw=params.get("modes_kw", None),
         mlp_ratio=params.get("mlp_ratio", 2.0),
         spectral_init_k0=params.get("spectral_init_k0", None),
+        downsample=params.get("downsample", 1),
+        lift_dim=params.get("lift_dim", None),
+        resample_skip=params.get("resample_skip", True),
         **kwargs,
     )

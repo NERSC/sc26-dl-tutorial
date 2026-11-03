@@ -215,3 +215,17 @@ def spectral_init_decay(k, k0):
     """Factor ``1 / (1 + (k/k0)^2)`` on the initial spectral weights, so that the modes with little signal
     start small (``k0`` is the wavenumber at which the weights have dropped to one half)."""
     return 1.0 / (1.0 + (k / k0) ** 2)
+
+
+def resample_modes(height, width):
+    """
+    Number of ``(kh, kw)`` modes kept when resampling between two grids, ``height x width`` being the smaller one on
+    each axis: the modes strictly below the smaller grid's Nyquist frequency, ``height - 1`` along h for an even
+    ``height`` and all of them for an odd one, and ``width // 2`` (even) or ``width // 2 + 1`` (odd) along the half
+    spectrum of w. Dropping the Nyquist mode keeps the two directions exactly symmetric: it has no well-defined
+    place on a larger grid (it would have to be split over +-Nyquist), and a real field's Nyquist mode is a single
+    real coefficient, so nothing but the very finest checkerboard is lost.
+    """
+    keep_h = height - 1 if height % 2 == 0 else height
+    keep_w = width // 2 if width % 2 == 0 else width // 2 + 1
+    return keep_h, keep_w
