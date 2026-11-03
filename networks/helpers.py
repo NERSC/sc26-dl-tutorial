@@ -134,22 +134,64 @@ def _zero_self_conjugate_imag(x, n, dim=-1):
 
     A c2r transform is only defined for these bins being real. CPU pocketfft discards the
     imaginary part, but backends may not (cuFFT has not been dependable in the past), so we
-    never leave it to them. This mirrors ``torch_harmonics.fft.irfft``. The scale is applied
-    functionally via ``torch.complex``: in-place writes through a strided complex view break
-    autograd on CPU+MKL, and this form also traces with ``fullgraph=True``.
+    never leave it to them. This mirrors ``torch_harmonics.fft.irfft``.
+
+    The scale is applied out of place on the real view of the spectrum. Assembling the result with
+    ``torch.complex(x.real, x.imag * scale)`` instead makes autograd keep both of its inputs for the backward
+    pass, i.e. one more copy of the whole complex field per call, whereas multiplying by a constant keeps nothing
+    but the constant. In-place writes through a strided complex view would break autograd on CPU+MKL.
 
     Along h-space / w-frequency tensors (our case) this is the Hermitian projection that
     ``irfft2`` applies on CPU, as the imaginary part of the whole column is dropped.
     """
     size = x.size(dim)
-    scale = torch.ones(size, dtype=x.real.dtype, device=x.device)
-    scale[0] = 0.0
+    scale = torch.ones(size, 2, dtype=x.real.dtype, device=x.device)
+    scale[0, 1] = 0.0
     if (n % 2 == 0) and (n // 2 < size):
-        scale[n // 2] = 0.0
-    shape = [1] * x.ndim
-    shape[dim] = -1
-    return torch.complex(x.real, x.imag * scale.reshape(*shape))
+        scale[n // 2, 1] = 0.0
+    axis = dim if dim >= 0 else dim - 1  # the same axis in the real view, which has one more (trailing) dim
+    shape = [1] * (x.ndim + 1)
+    shape[axis] = size
+    shape[-1] = 2
+    return torch.view_as_complex(torch.view_as_real(x) * scale.reshape(*shape))
 
+
+class _LinearNoSave(torch.autograd.Function):
+    """
+    Apply a linear function ``fn`` without autograd keeping its input. ``torch.fft.rfft`` and ``rfft2`` save their
+    (real, full-grid) input for the backward pass, although the backward of a linear map needs only its shape, which
+    is one more full-resolution fp32 copy of the activation per spectral layer. The backward here recomputes the
+    vector-Jacobian product on a zero input of the right shape, which exists only while the backward pass runs.
+    """
+
+    @staticmethod
+    def forward(ctx, x, fn):
+        ctx.fn = fn
+        ctx.meta = (x.shape, x.dtype, x.device)
+        return fn(x)
+
+    @staticmethod
+    def backward(ctx, grad):
+        shape, dtype, device = ctx.meta
+        with torch.enable_grad():
+            x = torch.zeros(shape, dtype=dtype, device=device, requires_grad=True)
+            y = ctx.fn(x)
+            (gx,) = torch.autograd.grad(y, x, grad)
+        return gx, None
+
+
+def rfft2_no_save(x, s, norm):
+    """``torch.fft.rfft2(x, s=s, norm=norm)`` whose backward does not keep ``x``."""
+    if not x.requires_grad:
+        return torch.fft.rfft2(x, s=s, norm=norm)
+    return _LinearNoSave.apply(x, lambda t: torch.fft.rfft2(t, s=s, norm=norm))
+
+
+def rfft_no_save(x, n, dim, norm):
+    """``torch.fft.rfft(x, n=n, dim=dim, norm=norm)`` whose backward does not keep ``x``."""
+    if not x.requires_grad:
+        return torch.fft.rfft(x, n=n, dim=dim, norm=norm)
+    return _LinearNoSave.apply(x, lambda t: torch.fft.rfft(t, n=n, dim=dim, norm=norm))
 
 def spectral_wavenumbers(modes_kh, modes_kw, h_range=None, w_range=None):
     """
