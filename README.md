@@ -132,6 +132,7 @@ Two things to keep in mind for the FNO:
 
 The FNO configs for wider models use Fourier downsampling, since the blocks' activation memory scales with the number of grid points they run on:
 * `mp_resample`: `downsample: 2`, 64 channels, at about the memory of `mp` with 16.
+* `mp_vit_matched`: parameter-matched to the ViT `base` config (48.3M parameters): `downsample: 2`, 76 channels, depth 4, 32 x 32 modes give 47.4M real parameters (a complex weight counts as two). Equal parameter counts do not mean equal cost, the FNO spends its FLOPs on FFTs and its activations scale with the latent grid.
 * `embed_large`: 2048 channels on a 4x coarser latent grid (1024 x 1024 for the 4096 x 4096 images), 16 x 16 modes, global batch 1. Launch it on 16 GPUs with `--tp=1 --sp1=4 --sp2=4`; tensor parallelism does not shard the spectral weights, which dominate at this width. 2048 channels with `downsample: 2` do not fit 40 GB per GPU. The learning rate and the other training settings of this config are inherited from `mp` and not tuned.
 
 #### Creating your own config

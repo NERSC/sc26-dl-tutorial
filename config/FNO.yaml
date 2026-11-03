@@ -88,6 +88,19 @@ mp_resample:
   downsample: 2
   lift_dim: 16
 
+# Parameter-matched to the ViT base config (embed_dim 512, depth 12, patch 32: 48.3M parameters). Downsampling by 2 per axis,
+# modes 32x32 and embed_dim 76 give 47.4M real parameters (a complex weight counts as two); almost all of them are the
+# spectral weights, 2 * embed_dim^2 * modes_kh * modes_kw per block (the ViT's are in its attention and MLP matrices).
+# Equal parameter counts do not mean equal cost: the FNO spends its FLOPs on FFTs at the latent grid.
+mp_vit_matched:
+  <<: *mp
+  embed_dim: 76
+  depth: 4
+  downsample: 2
+  lift_dim: 16
+  modes_kh: 32
+  modes_kw: 32
+
 # 2048 channels. The blocks run on a 4x coarser grid per axis (1024x1024 for the 4096x4096 images): 2048 channels on a
 # 2x coarser grid do not fit 40 GB per GPU at 16 GPUs. The spectral weights scale as embed_dim^2 * modes_kh * modes_kw,
 # so the retained modes are few. Launch on 16 GPUs with --tp=1 --sp1=4 --sp2=4 (tp does not pay here, see the plan).
