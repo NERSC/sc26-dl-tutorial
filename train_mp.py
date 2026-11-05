@@ -22,11 +22,12 @@ from utils import comm
 from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
 from distributed.spatial_sharding import (
+    make_convnext_spatial_shard,
     make_grid_spatial_shard,
     make_swin_spatial_shard,
     make_vit_spatial_shard,
 )
-from networks import fno_mp, swin_mp, vit_mp, vit_te
+from networks import convnext_mp, fno_mp, swin_mp, vit_mp, vit_te
 
 from distributed.mappings import (
     allgather_forward_split_backward,
@@ -45,6 +46,8 @@ def build_model(params, spatial_shard):
     if network == "swin":
         logging.info("using Swin")
         return swin_mp.Swin(params, spatial_shard=spatial_shard)
+    if network == "convnext":
+        return convnext_mp.ConvNeXt(params, spatial_shard=spatial_shard)
     if network != "vit":
         raise ValueError(f"unknown network {network!r}")
     if params.model_backend == "transformer-engine":
@@ -406,7 +409,7 @@ if __name__ == "__main__":
     # for data loader, set the actual number of data shards and id
     params.data_num_shards = comm.get_size("dp")
     params.data_shard_id = comm.get_rank("dp")
-    # The shard is a plain grid for FNO and patch-aligned for transformer models.
+    # The loader and model use the same spatial tile.
     network = params.get("network", params.get("model", "vit")).lower()
     if network == "fno":
         spatial_shard = make_grid_spatial_shard(
@@ -426,7 +429,13 @@ if __name__ == "__main__":
             "sp2_rank": comm.get_rank("sp2"),
             "order": params.get("order", "tp-sp1-sp2-dp"),
         }
-        if network == "swin":
+        if network == "convnext":
+            spatial_shard = make_convnext_spatial_shard(
+                kernel_size=params.get("kernel_size", 7),
+                tp_size=comm.get_size("tp"),
+                **shard_kwargs,
+            )
+        elif network == "swin":
             spatial_shard = make_swin_spatial_shard(
                 window_size=params.window_size,
                 **shard_kwargs,

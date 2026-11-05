@@ -18,7 +18,7 @@ from utils import get_data_loader_distributed, profiled_batches
 from utils.loss import mse_loss
 from utils.metrics import rmse
 from utils.plots import generate_images
-from networks import fno, swin, vit
+from networks import convnext, fno, swin, vit
 
 
 def build_model(params):
@@ -29,6 +29,8 @@ def build_model(params):
         return swin.Swin(params)
     if network == "fno":
         return fno.FNO(params)
+    if network == "convnext":
+        return convnext.ConvNeXt(params)
     raise ValueError(f"unknown network {network!r}")
 
 

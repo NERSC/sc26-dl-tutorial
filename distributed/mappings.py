@@ -4,6 +4,7 @@ from torch.nn.parallel import DistributedDataParallel
 
 from utils import comm
 from distributed.helpers import (
+    _exchange_halo_edges,
     _distributed_roll,
     _gather,
     _reduce,
@@ -13,6 +14,57 @@ from distributed.helpers import (
     compute_split_shapes,
     validate_param_comm_metadata,
 )
+
+
+class _HaloForwardSumBackward(torch.autograd.Function):
+    """Attach neighbors' values; return their gradients to the owning ranks."""
+
+    @staticmethod
+    def forward(input_, halo, dim, comm_name):
+        extent = input_.shape[dim]
+        left, right = _exchange_halo_edges(
+            input_.narrow(dim, 0, halo),
+            input_.narrow(dim, extent - halo, halo),
+            comm_name,
+        )
+        shape = list(input_.shape)
+        shape[dim] = halo
+        if left is None:
+            left = input_.new_zeros(shape)
+        if right is None:
+            right = input_.new_zeros(shape)
+        return torch.cat((left, input_, right), dim=dim)
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        input_, ctx.halo, ctx.dim, ctx.comm_name = inputs
+        ctx.extent = input_.shape[ctx.dim]
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        halo, extent, dim = ctx.halo, ctx.extent, ctx.dim
+        grad_input = grad_output.narrow(dim, halo, extent).clone()
+        left, right = _exchange_halo_edges(
+            grad_output.narrow(dim, 0, halo),
+            grad_output.narrow(dim, halo + extent, halo),
+            ctx.comm_name,
+        )
+        # Both contributions must accumulate when the two boundary bands overlap.
+        if left is not None:
+            grad_input.narrow(dim, 0, halo).add_(left)
+        if right is not None:
+            grad_input.narrow(dim, extent - halo, halo).add_(right)
+        return grad_input, None, None, None
+
+
+def halo_forward_sum_backward(input_, halo, dim, comm_name):
+    """Extend a split axis; leave unsplit axes for ordinary convolution padding.
+
+    The model must validate the halo width on every tile before communication.
+    """
+    if halo == 0 or comm.get_size(comm_name) == 1:
+        return input_
+    return _HaloForwardSumBackward.apply(input_, halo, dim, comm_name)
 
 
 class _IdentityForwardAllReduceBackward(torch.autograd.Function):
