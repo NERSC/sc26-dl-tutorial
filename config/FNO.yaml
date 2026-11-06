@@ -9,6 +9,9 @@ base: &base
   modes_kw: 64 # retained wavenumbers in w
   mlp_ratio: 2.0 # hidden width of the channel MLP in each block, 0 disables it
   spectral_init_k0: 8.0 # scale the initial spectral weights by 1/(1+(k/k0)^2), k in grid-index units; None disables
+  downsample: 1 # Fourier downsampling factor per axis: the blocks run on a latent grid this many times coarser, which divides their activation memory by downsample^2
+  lift_dim: None # channels of the full-grid lift and projection when downsampling (None: 16); embed_dim without downsampling
+  resample_skip: true # add the full-grid lift features back after the upsampling: they carry the wavenumbers the latent grid cannot represent
   model_backend: 'pytorch'
 
   # Training config
@@ -77,3 +80,35 @@ mp: &mp
   amp_mode: bf16
   enable_jit: false
   enable_fused: false
+
+# Fourier downsampling by 2 per axis: the blocks run on 4x fewer grid points, so 4x the channels fit at about the same memory
+mp_resample:
+  <<: *mp
+  embed_dim: 64
+  downsample: 2
+  lift_dim: 16
+
+# Parameter-matched to the ViT base config (embed_dim 512, depth 12, patch 32: 48.3M parameters). Downsampling by 2 per axis,
+# modes 32x32 and embed_dim 76 give 47.4M real parameters (a complex weight counts as two); almost all of them are the
+# spectral weights, 2 * embed_dim^2 * modes_kh * modes_kw per block (the ViT's are in its attention and MLP matrices).
+# Equal parameter counts do not mean equal cost: the FNO spends its FLOPs on FFTs at the latent grid.
+mp_vit_matched:
+  <<: *mp
+  embed_dim: 76
+  depth: 4
+  downsample: 2
+  lift_dim: 16
+  modes_kh: 32
+  modes_kw: 32
+
+# 2048 channels. The blocks run on a 4x coarser grid per axis (1024x1024 for the 4096x4096 images): 2048 channels on a
+# 2x coarser grid do not fit 40 GB per GPU at 16 GPUs. The spectral weights scale as embed_dim^2 * modes_kh * modes_kw,
+# so the retained modes are few. Launch on 16 GPUs with --tp=1 --sp1=4 --sp2=4 (tp does not pay here, see the plan).
+embed_large:
+  <<: *mp
+  embed_dim: 2048
+  downsample: 4
+  lift_dim: 32
+  modes_kh: 16
+  modes_kw: 16
+  global_batch_size: 1

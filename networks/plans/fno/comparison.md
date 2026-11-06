@@ -82,7 +82,15 @@ defects in the implementation (Section 2), all fixed.
    because it let the weights of modes without signal random-walk. Any quantity that depends on the wavenumber has
    to use the **global** mode index in the distributed layer; this is tested, including that the test fails if the
    local index is used.
-8. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
+8. **Autograd kept two full-grid copies per spectral layer.** Measuring where activation memory goes (for the
+   Fourier downsampling) showed that `rfft2` and `rfft` save their real input, and that `torch.complex` saves both of
+   its inputs, although neither backward needs them: about four bf16 activations per spectral layer, which is also
+   why the analytic estimate was low. Fixed with no-save FFTs and a complex-free mask, exactly the gradients of plain
+   autograd, guarded by tests that fail on the old formulations. Saved memory 19% to 27% across the configs measured.
+   Truncating the modes does save memory inside the spectral layer (0.002 GB kept for 64x64 modes against 0.250 GB
+   for the full spectrum, one layer at `b=4, C=16, 1024^2`), but cannot reduce the layers around it, which is what
+   the Fourier downsampling is for.
+9. **Positive result:** the real DDP wrapper and reduction hooks handled complex parameters and
    mixed reduction signatures correctly (gradients equal the serial reference at `dp=2` with
    `sp1 x sp2 = 2x1, 2x2`, and with `tp=2`).
 

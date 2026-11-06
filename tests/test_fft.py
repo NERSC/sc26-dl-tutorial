@@ -6,6 +6,7 @@ from parameterized import parameterized
 
 from tests.helpers import DistributedTestCase
 from distributed.fft import DistributedRealFFT2, DistributedInverseRealFFT2
+from tests.test_spectral_memory import saved_bytes
 
 # (h_dim, w_dim, channel_dim): channels-first is the default and what the FNO uses, channels-last
 # checks that the transforms are layout-general
@@ -71,6 +72,16 @@ class TestDistributedFFT(DistributedTestCase):
             z = inv(y.detach())
             z_full = from_layout(self._gather(z, height, width, h, w), dims)
             self.assertTrue(torch.allclose(z_full, full.detach(), atol=1e-4, rtol=1e-4))
+
+    def test_pencil_ffts_keep_nothing_at_full_resolution(self):
+        """autograd keeps only the (small) truncated spectrum of the forward and inverse pencil FFTs, not a copy of
+        the local field: rfft used to keep its real input, torch.complex both parts of the spectrum"""
+        height, width, c = 128, 256, 8
+        fwd = DistributedRealFFT2(height, width, 8, 8).to(self.device)
+        inv = DistributedInverseRealFFT2(height, width, 8, 8).to(self.device)
+        x = self._split(torch.randn(2, c, height, width, device=self.device)).clone().requires_grad_(True)
+        kept, _ = saved_bytes(lambda t: inv(fwd(t)), x)
+        self.assertLess(kept, 0.05 * x.numel() * 4, f"the pencil FFTs keep {kept / (x.numel() * 4):.2f} x the local field")
 
     def test_default_layout_is_channels_first(self):
         fwd = DistributedRealFFT2(32, 64)

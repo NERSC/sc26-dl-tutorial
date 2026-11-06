@@ -44,11 +44,16 @@ class TestFNOModel(DistributedTestCase):
             [(32, 64), 4, 3, 8, 2, None, None, 2.0],
             [(31, 62), 4, 3, 8, 2, 11, 9, 2.0],
             [(32, 64), 4, 3, 8, 1, 12, 17, 0.0],
+            # Fourier downsampling: the blocks on a latent grid, the widening/narrowing layers and the full-grid skip
+            [(32, 64), 4, 3, 8, 2, 6, 5, 2.0, dict(downsample=2, lift_dim=8)],
+            [(36, 72), 4, 3, 16, 2, 6, 5, 2.0, dict(downsample=2, lift_dim=8, resample_skip=False)],
+            [(48, 96), 4, 3, 8, 1, 5, 5, 2.0, dict(downsample=4, lift_dim=8)],
         ]
     )
-    def test_matches_serial(self, img_size, cin, cout, embed, depth, kh, kw, mlp_ratio):
-        serial = SerialFNO(img_size, cin, cout, embed, depth, kh, kw, mlp_ratio).to(self.device)
-        model = DistributedFNO(img_size, cin, cout, embed, depth, kh, kw, mlp_ratio).to(self.device)
+    def test_matches_serial(self, img_size, cin, cout, embed, depth, kh, kw, mlp_ratio, extra=None):
+        extra = extra or {}
+        serial = SerialFNO(img_size, cin, cout, embed, depth, kh, kw, mlp_ratio, **extra).to(self.device)
+        model = DistributedFNO(img_size, cin, cout, embed, depth, kh, kw, mlp_ratio, **extra).to(self.device)
 
         # same weights everywhere: broadcast the serial model, then take the shards
         with torch.no_grad():

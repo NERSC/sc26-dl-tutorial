@@ -124,11 +124,16 @@ The data and training keys (`img_size`, `n_in_channels`, `global_batch_size`, `l
 | Network | Model keys |
 |---|---|
 | ViT | `embed_dim`, `depth`, `num_heads`, `patch_size`, `dropout` |
-| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers in h and w after truncation, `None` keeps all), `mlp_ratio` (width of the per-block channel MLP, `0` disables it), `spectral_init_k0` (starts the spectral weights of high wavenumbers smaller, by `1/(1+(k/k0)^2)` with `k` in grid-index units; `None` disables, see the plan) |
+| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers in h and w after truncation, `None` keeps all), `mlp_ratio` (width of the per-block channel MLP, `0` disables it), `spectral_init_k0` (starts the spectral weights of high wavenumbers smaller, by `1/(1+(k/k0)^2)` with `k` in grid-index units; `None` disables, see the plan), `downsample` (Fourier downsampling factor per axis: the blocks run on a latent grid that many times coarser, `downsample^2` times less activation memory; `1` is the plain FNO), `lift_dim` (channels of the full-grid lift and projection when downsampling, default 16) and `resample_skip` (add the full-grid lift features after the upsampling) |
 
 Two things to keep in mind for the FNO:
 * It works at the full image resolution in every layer, so its activation memory scales with `embed_dim` times the number of grid points. The `mp` config therefore uses `embed_dim: 16` for the 4096 x 4096 images, the single-GPU configs use a global batch size of 1, and `mp` uses 8 on 16 GPUs (16 ran out of 40 GB). See [`networks/plans/fno/analysis.md`](networks/plans/fno/analysis.md) for the numbers.
 * With model parallelism, `sp1` and `sp2` shard the image in H and W, and the FFT transposes the data between them. Like the ViT, the FNO is sharded at its interface: each rank loads only its (H, W) tile of every image (`spatial_read_mode: 'local'`), the model takes and returns that tile, and the loss and metrics are all-reduced over the spatial group, so no rank holds the full image. The channel count (`embed_dim`), the image size and the retained mode counts must each be at least `sp1` and `sp2`, otherwise the model raises an error when it is built. Use `--tp=1`: the FNO has almost no weights to shard with tensor parallelism. See [`networks/plans/fno/parallelism-plan.md`](networks/plans/fno/parallelism-plan.md).
+
+The FNO configs for wider models use Fourier downsampling, since the blocks' activation memory scales with the number of grid points they run on:
+* `mp_resample`: `downsample: 2`, 64 channels, at about the memory of `mp` with 16.
+* `mp_vit_matched`: parameter-matched to the ViT `base` config (48.3M parameters): `downsample: 2`, 76 channels, depth 4, 32 x 32 modes give 47.4M real parameters (a complex weight counts as two). Equal parameter counts do not mean equal cost, the FNO spends its FLOPs on FFTs and its activations scale with the latent grid.
+* `embed_large`: 2048 channels on a 4x coarser latent grid (1024 x 1024 for the 4096 x 4096 images), 16 x 16 modes, global batch 1. Launch it on 16 GPUs with `--tp=1 --sp1=4 --sp2=4`; tensor parallelism does not shard the spectral weights, which dominate at this width. 2048 channels with `downsample: 2` do not fit 40 GB per GPU. The learning rate and the other training settings of this config are inherited from `mp` and not tuned.
 
 #### Creating your own config
 
