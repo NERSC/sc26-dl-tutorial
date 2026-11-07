@@ -26,8 +26,8 @@ do
     fi
 done
 
-if [[ $model != vit && $model != swin && $model != fno ]]; then
-    echo "ERROR: --model must be vit, swin, or fno" >&2
+if [[ $model != vit && $model != swin && $model != fno && $model != convnext ]]; then
+    echo "ERROR: --model must be vit, swin, fno, or convnext" >&2
     exit 2
 fi
 

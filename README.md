@@ -130,6 +130,21 @@ Two things to keep in mind for the FNO:
 * It works at the full image resolution in every layer, so its activation memory scales with `embed_dim` times the number of grid points. The `mp` config therefore uses `embed_dim: 16` for the 4096 x 4096 images, the single-GPU configs use a global batch size of 1, and `mp` uses 8 on 16 GPUs (16 ran out of 40 GB). See [`networks/plans/fno/analysis.md`](networks/plans/fno/analysis.md) for the numbers.
 * With model parallelism, `sp1` and `sp2` shard the image in H and W, and the FFT transposes the data between them. Like the ViT, the FNO is sharded at its interface: each rank loads only its (H, W) tile of every image (`spatial_read_mode: 'local'`), the model takes and returns that tile, and the loss and metrics are all-reduced over the spatial group, so no rank holds the full image. The channel count (`embed_dim`), the image size and the retained mode counts must each be at least `sp1` and `sp2`, otherwise the model raises an error when it is built. Use `--tp=1`: the FNO has almost no weights to shard with tensor parallelism. See [`networks/plans/fno/parallelism-plan.md`](networks/plans/fno/parallelism-plan.md).
 
+#### ConvNeXt
+
+ConvNeXt predicts fields using a patch stem, constant-resolution depthwise-convolution blocks with channel MLPs, and patch reconstruction. Its spatial implementation exchanges neighboring halos and supports DP plus height/width/2D spatial partitioning.
+
+[`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) provides two compiled BF16/DALI presets matching the ViT patch sizes, widths and depths: `small` (32, 512, 12; global batch 4) and `big` (16, 1536, 16; global batch 4). Both use 1,024 training samples and 32 validation samples. With the data/log mounts configured as above:
+
+```bash
+# One GPU
+sbatch --nodes=1 --ntasks=1 --gpus-per-node=1 submit_pm.sh --yaml_config ./config/ConvNeXt.yaml --config small --run_num=convnext_small
+# Two four-GPU nodes: DP2 x SP4, two examples per spatial replica (global batch 4)
+sbatch --nodes=2 submit_pm_mp.sh --yaml_config ./config/ConvNeXt.yaml --config big --tp=1 --sp1=4 --sp2=1 --order=tp-sp1-sp2-dp --run_num=convnext_big
+```
+
+The presets use local reads: prefer height-only splitting to preserve contiguous blocks of complete rows. For layouts that split width, `spatial_read_mode: 'all'` reads full images on the CPU before cropping each rank's tile.
+
 #### Creating your own config
 
 Copy a named config in the YAML file and change what you need. The configs inherit from each other with YAML anchors, so a new config only has to list the differences:
