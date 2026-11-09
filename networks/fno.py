@@ -10,7 +10,6 @@ from networks.helpers import (
     _pad_modes,
     _zero_self_conjugate_imag,
     resample_modes,
-    rfft2_no_save,
     spectral_init_decay,
     spectral_wavenumbers,
 )
@@ -97,7 +96,7 @@ class FourierNeuralOperatorLayer(nn.Module):
         dtype = x.dtype
 
         with torch.autocast(device_type=x.device.type, enabled=False):
-            x = rfft2_no_save(x.to(torch.float32), (self.height, self.width), "ortho")
+            x = torch.fft.rfft2(x.to(torch.float32), s=(self.height, self.width), norm="ortho")
             x = _truncate_modes(x.narrow(-1, 0, self.modes_kw), self.modes_kh, dim=-2)
 
             x = torch.einsum("bihw,iohw->bohw", x, self.weight)
@@ -137,7 +136,7 @@ class FourierResample(nn.Module):
         h2, w2 = self.out_size
 
         with torch.autocast(device_type=x.device.type, enabled=False):
-            x = rfft2_no_save(x.to(torch.float32), self.in_size, "forward")
+            x = torch.fft.rfft2(x.to(torch.float32), s=self.in_size, norm="forward")
             x = _truncate_modes(x.narrow(-1, 0, self.keep_w), self.keep_h, dim=-2)
 
             x = _pad_modes(x, self.keep_h, h2, dim=-2)

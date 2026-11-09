@@ -221,10 +221,10 @@ spectral layer that the math does not need: `torch.fft.rfft2` and `rfft` save th
 only needs its shape (one fp32 copy of the activation per layer), and `torch.complex(real, imag)`, used to zero the
 imaginary part of the self-conjugate columns, saves both of its inputs (the whole complex field once more). Together
 about four bf16 activations per layer, a fifth to a quarter of everything the FNO saves: 10.75 to 8.66 GB for `mp` and
-12.35 to 8.97 GB for `mp_resample`. The no-save FFTs (`networks.helpers.rfft2_no_save`, `rfft_no_save`) recompute the
-vector-Jacobian product on a zero input in the backward pass, and the mask is applied on the real view. Both give
-exactly the gradients of plain autograd (`tests/test_spectral_memory.py`), and the same tests fail on the old
-formulations if a layer ever keeps a full-resolution tensor again.
+12.35 to 8.97 GB for `mp_resample` with both removed (not re-measured with only the mask fix). The mask is now applied on the real view, which keeps nothing.
+The FFTs are left as plain `torch.fft` calls: avoiding their saved input needs a custom `autograd.Function`, which is
+not worth the complexity in a tutorial, especially since the spectral blocks run on the coarse latent grid when the
+FNO downsamples. `tests/test_spectral_memory.py` checks that a layer keeps no more than this one copy.
 
 ## Topology Handoff
 

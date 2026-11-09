@@ -6,7 +6,7 @@ from torch import nn
 from utils import comm
 from distributed.helpers import compute_split_shapes
 from distributed.mappings import distributed_transpose
-from networks.helpers import _truncate_modes, _pad_modes, _zero_self_conjugate_imag, rfft_no_save
+from networks.helpers import _truncate_modes, _pad_modes, _zero_self_conjugate_imag
 
 
 # Tensor layout: the transforms below take the position of the h, w and channel dims explicitly.
@@ -94,7 +94,7 @@ class DistributedRealFFT2(_DistributedFFT2Base):
         if self.comm_size_w > 1:
             x = distributed_transpose(x, (c, w), self.w_shapes, self.w_comm)
 
-        x = rfft_no_save(x, self.width, w, norm)
+        x = torch.fft.rfft(x, n=self.width, dim=w, norm=norm)
         x = _contiguous_complex_safe(x.narrow(w, 0, self.modes_kw))
 
         # kw is split, c is local

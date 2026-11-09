@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from parameterized import parameterized
 
 from networks.fno import FourierNeuralOperatorLayer, FourierResample
-from networks.helpers import _zero_self_conjugate_imag, rfft2_no_save, rfft_no_save
+from networks.helpers import _zero_self_conjugate_imag
 
 
 def saved_bytes(fn, *inputs, params=()):
@@ -25,30 +25,8 @@ def saved_bytes(fn, *inputs, params=()):
     return total, out
 
 
-class TestNoSaveFFTs(unittest.TestCase):
-    """The no-save FFTs and the complex-free mask are the same maps as plain torch, with the same gradients."""
-
-    @parameterized.expand([[(16, 24), "ortho"], [(15, 21), "forward"], [(8, 8), "backward"]])
-    def test_rfft2_gradient_matches_autograd(self, size, norm):
-        x = torch.randn(2, 3, *size, dtype=torch.float64, requires_grad=True)
-        y = torch.fft.rfft2(x, s=size, norm=norm)
-        y2 = rfft2_no_save(x, size, norm)
-        torch.testing.assert_close(y2, y)
-        g = torch.randn_like(y)
-        (gx,) = torch.autograd.grad(y, x, g)
-        (gx2,) = torch.autograd.grad(y2, x, g)
-        torch.testing.assert_close(gx2, gx)
-
-    @parameterized.expand([[-1, 24], [3, 24], [2, 16], [-2, 16]])
-    def test_rfft_gradient_matches_autograd(self, dim, n):
-        x = torch.randn(2, 3, 16, 24, dtype=torch.float64, requires_grad=True)
-        y = torch.fft.rfft(x, n=n, dim=dim, norm="ortho")
-        y2 = rfft_no_save(x, n, dim, "ortho")
-        torch.testing.assert_close(y2, y)
-        g = torch.randn_like(y)
-        (gx,) = torch.autograd.grad(y, x, g)
-        (gx2,) = torch.autograd.grad(y2, x, g)
-        torch.testing.assert_close(gx2, gx)
+class TestSpectralGradients(unittest.TestCase):
+    """The complex-free mask is the same map as the torch.complex formulation, with the same gradients."""
 
     @parameterized.expand([[-1, 64, 33], [-1, 63, 32], [3, 64, 33], [2, 8, 9], [-2, 8, 9]])
     def test_zero_self_conjugate_imag_matches_the_complex_form(self, dim, n, size):
@@ -97,10 +75,11 @@ class TestNoSaveFFTs(unittest.TestCase):
         torch.testing.assert_close(gw, rw, atol=1e-4, rtol=1e-4)
 
 
-class TestSpectralLayersKeepNothingAtFullResolution(unittest.TestCase):
-    """What autograd keeps for the backward pass of a spectral layer is the truncated spectrum and the weight, not
-    full-resolution copies of the activation: rfft2 used to keep its fp32 input and torch.complex both of its inputs,
-    about four bf16 activations' worth per layer, which is a third of the FNO's saved activations."""
+class TestSpectralLayersKeepOneCopyAtFullResolution(unittest.TestCase):
+    """What autograd keeps for the backward pass of a spectral layer is the (fp32) input of rfft2, the truncated
+    spectrum and the weight. rfft2 keeps its input although its backward only needs the shape; we accept that one
+    copy for simplicity. torch.complex used to keep both of its inputs on top of that, the whole complex field once
+    more, and these tests fail if a layer ever keeps such an additional full-resolution tensor again."""
 
     def test_spectral_layer(self):
         h, w, c = 128, 128, 8
@@ -108,15 +87,16 @@ class TestSpectralLayersKeepNothingAtFullResolution(unittest.TestCase):
         x = torch.randn(2, c, h, w, requires_grad=True)
         kept, _ = saved_bytes(layer, x, params=layer.parameters())
         field = x.numel() * 4
-        # only the truncated spectrum, 2 x 8 x 16 x 16 complex = 32 KB of a 1 MB field (3%); the old code kept
-        # an fp32 copy of the whole field and the complex field once more, about 2 x the input
-        self.assertLess(kept, 0.05 * field, f"the layer keeps {kept / field:.2f} x the input field for backward")
+        # the rfft2 input (1 x the field) and the truncated spectrum, 2 x 8 x 16 x 16 complex = 32 KB of a 1 MB
+        # field (3%); the torch.complex mask kept the complex field once more, about 2 x the input in total
+        self.assertLess(kept, 1.05 * field, f"the layer keeps {kept / field:.2f} x the input field for backward")
 
     @parameterized.expand([[(128, 128), (64, 64)], [(64, 64), (128, 128)]])
     def test_resampling(self, in_size, out_size):
         x = torch.randn(2, 8, *in_size, requires_grad=True)
         kept, _ = saved_bytes(FourierResample(in_size, out_size), x)
-        self.assertLess(kept, 0.02 * max(x.numel() * 4, 2 * 8 * out_size[0] * out_size[1] * 4))
+        field = x.numel() * 4
+        self.assertLess(kept, field + 0.02 * max(field, 2 * 8 * out_size[0] * out_size[1] * 4))
 
 
 if __name__ == "__main__":

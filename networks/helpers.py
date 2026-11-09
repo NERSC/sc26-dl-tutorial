@@ -156,43 +156,6 @@ def _zero_self_conjugate_imag(x, n, dim=-1):
     return torch.view_as_complex(torch.view_as_real(x) * scale.reshape(*shape))
 
 
-class _LinearNoSave(torch.autograd.Function):
-    """
-    Apply a linear function ``fn`` without autograd keeping its input. ``torch.fft.rfft`` and ``rfft2`` save their
-    (real, full-grid) input for the backward pass, although the backward of a linear map needs only its shape, which
-    is one more full-resolution fp32 copy of the activation per spectral layer. The backward here recomputes the
-    vector-Jacobian product on a zero input of the right shape, which exists only while the backward pass runs.
-    """
-
-    @staticmethod
-    def forward(ctx, x, fn):
-        ctx.fn = fn
-        ctx.meta = (x.shape, x.dtype, x.device)
-        return fn(x)
-
-    @staticmethod
-    def backward(ctx, grad):
-        shape, dtype, device = ctx.meta
-        with torch.enable_grad():
-            x = torch.zeros(shape, dtype=dtype, device=device, requires_grad=True)
-            y = ctx.fn(x)
-            (gx,) = torch.autograd.grad(y, x, grad)
-        return gx, None
-
-
-def rfft2_no_save(x, s, norm):
-    """``torch.fft.rfft2(x, s=s, norm=norm)`` whose backward does not keep ``x``."""
-    if not x.requires_grad:
-        return torch.fft.rfft2(x, s=s, norm=norm)
-    return _LinearNoSave.apply(x, lambda t: torch.fft.rfft2(t, s=s, norm=norm))
-
-
-def rfft_no_save(x, n, dim, norm):
-    """``torch.fft.rfft(x, n=n, dim=dim, norm=norm)`` whose backward does not keep ``x``."""
-    if not x.requires_grad:
-        return torch.fft.rfft(x, n=n, dim=dim, norm=norm)
-    return _LinearNoSave.apply(x, lambda t: torch.fft.rfft(t, n=n, dim=dim, norm=norm))
-
 def spectral_wavenumbers(modes_kh, modes_kw, h_range=None, w_range=None):
     """
     Radial wavenumber ``|k| = sqrt(kh^2 + kw^2)``, in grid-index units, of the retained spectral modes, in the
