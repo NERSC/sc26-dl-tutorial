@@ -1,6 +1,5 @@
 import torch
 import torch.distributed as dist
-import torch.distributed._functional_collectives as funcol
 from utils import comm
 
 
@@ -317,22 +316,12 @@ def _distributed_roll(input_, shift, dim, comm_name):
     return torch.cat((rolled[tuple(keep)], recv_buffer), dim=dim)
 
 
-def _all_to_all_single(input_, output_split_sizes, input_split_sizes, comm_name):
-    """Exchange packed halo edges; zero counts skip non-neighbor ranks."""
-    output = funcol.all_to_all_single(
-        input_.contiguous(), output_split_sizes, input_split_sizes,
-        comm.get_group(comm_name),
-    )
-    if isinstance(output, funcol.AsyncCollectiveTensor):
-        output = output.wait()
-    return output
-
-
 def _exchange_halo_edges(left_send, right_send, comm_name):
     """Send just the boundary strips, with no wraparound at global edges.
 
     For rank 1 of four, counts are [edge_size, 0, edge_size, 0]. Neighboring
     strips have matching shapes even when the tiles have unequal core widths.
+    The caller must validate that every tile is at least as wide as the halo.
     """
     rank = comm.get_rank(comm_name)
     size = comm.get_size(comm_name)
@@ -347,7 +336,13 @@ def _exchange_halo_edges(left_send, right_send, comm_name):
     if rank + 1 < size:
         counts[rank + 1] = edge_size
         edges.append(right_send.clone(memory_format=torch.contiguous_format).view(-1))
-    received = _all_to_all_single(torch.cat(edges), counts, counts, comm_name)
+    packed = torch.cat(edges)
+    received = torch.empty_like(packed)
+    dist.all_to_all_single(
+        received, packed,
+        output_split_sizes=counts, input_split_sizes=counts,
+        group=comm.get_group(comm_name),
+    )
     left_count = edge_size if rank > 0 else 0
     left = received[:left_count].view_as(left_send) if rank > 0 else None
     right = received[left_count:].view_as(right_send) if rank + 1 < size else None

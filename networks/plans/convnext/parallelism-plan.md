@@ -205,7 +205,7 @@ Risks:
 3. Compare reconstructed input gradients against the serial baseline.
 4. Compare all parameter gradients after SP1-SP2 and DP reductions.
 5. Verify replicated parameters remain synchronized across repeated optimizer updates.
-6. Check eager and compiled execution, including BF16 and thin halo buffers.
+6. Check BF16 execution and thin halo buffers.
 7. Measure peak allocated/reserved CUDA memory and NVML high-water marks.
 8. Benchmark samples/second and data waits with fixed batch, dataset size,
    precision, and launch settings.

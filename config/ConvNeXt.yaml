@@ -14,7 +14,7 @@ small: &small
   num_iters: 4096
   amp_mode: bf16
   enable_fused: true
-  enable_jit: true
+  enable_jit: false
   expdir: '/logs'
   lr: 5E-4
 

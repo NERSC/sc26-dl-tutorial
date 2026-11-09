@@ -19,7 +19,7 @@ This analysis fixes the `big` configuration in `config/ConvNeXt.yaml` and uses
 | Trainable parameters (M) | 304.996 |
 | Optimizer | Fused Adam, betas `(0.9, 0.95)`, learning rate `5e-4` |
 | Checkpointing | None |
-| Assumptions | Compilation enabled; global batch 4; decimal GB |
+| Assumptions | Eager execution; global batch 4; decimal GB |
 
 ## Representative Model Configuration
 
@@ -83,8 +83,7 @@ excluded. Backward FLOPs are estimated as twice forward FLOPs.
 The activation estimate budgets FP32 LayerNorm inputs and statistics, BF16
 convolution and MLP tensors, and an FP32 loss difference. One BF16 hidden
 field is 0.805 GB; an expanded MLP field is 3.221 GB. Residual adds require no
-separate saved input. Compilation can fuse operations or recompute values,
-changing the retained-tensor estimate.
+separate saved input.
 
 ## Memory Summary
 

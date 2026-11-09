@@ -134,7 +134,7 @@ Two things to keep in mind for the FNO:
 
 ConvNeXt predicts fields using a patch stem, constant-resolution depthwise-convolution blocks with channel MLPs, and patch reconstruction. Its spatial implementation exchanges neighboring halos and supports DP plus height/width/2D spatial partitioning.
 
-[`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) provides two compiled BF16/DALI presets matching the ViT patch sizes, widths and depths: `small` (32, 512, 12; global batch 4) and `big` (16, 1536, 16; global batch 4). Both use 1,024 training samples and 32 validation samples. With the data/log mounts configured as above:
+[`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) provides two BF16/DALI presets matching the ViT patch sizes, widths and depths: `small` (32, 512, 12; global batch 4) and `big` (16, 1536, 16; global batch 4). Both use 1,024 training samples and 32 validation samples. With the data/log mounts configured as above:
 
 ```bash
 # One GPU
