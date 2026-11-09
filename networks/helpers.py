@@ -134,21 +134,26 @@ def _zero_self_conjugate_imag(x, n, dim=-1):
 
     A c2r transform is only defined for these bins being real. CPU pocketfft discards the
     imaginary part, but backends may not (cuFFT has not been dependable in the past), so we
-    never leave it to them. This mirrors ``torch_harmonics.fft.irfft``. The scale is applied
-    functionally via ``torch.complex``: in-place writes through a strided complex view break
-    autograd on CPU+MKL, and this form also traces with ``fullgraph=True``.
+    never leave it to them. This mirrors ``torch_harmonics.fft.irfft``.
+
+    The scale is applied out of place on the real view of the spectrum. Assembling the result with
+    ``torch.complex(x.real, x.imag * scale)`` instead makes autograd keep both of its inputs for the backward
+    pass, i.e. one more copy of the whole complex field per call, whereas multiplying by a constant keeps nothing
+    but the constant. In-place writes through a strided complex view would break autograd on CPU+MKL.
 
     Along h-space / w-frequency tensors (our case) this is the Hermitian projection that
     ``irfft2`` applies on CPU, as the imaginary part of the whole column is dropped.
     """
     size = x.size(dim)
-    scale = torch.ones(size, dtype=x.real.dtype, device=x.device)
-    scale[0] = 0.0
+    scale = torch.ones(size, 2, dtype=x.real.dtype, device=x.device)
+    scale[0, 1] = 0.0
     if (n % 2 == 0) and (n // 2 < size):
-        scale[n // 2] = 0.0
-    shape = [1] * x.ndim
-    shape[dim] = -1
-    return torch.complex(x.real, x.imag * scale.reshape(*shape))
+        scale[n // 2, 1] = 0.0
+    axis = dim if dim >= 0 else dim - 1  # the same axis in the real view, which has one more (trailing) dim
+    shape = [1] * (x.ndim + 1)
+    shape[axis] = size
+    shape[-1] = 2
+    return torch.view_as_complex(torch.view_as_real(x) * scale.reshape(*shape))
 
 
 def spectral_wavenumbers(modes_kh, modes_kw, h_range=None, w_range=None):
@@ -173,3 +178,17 @@ def spectral_init_decay(k, k0):
     """Factor ``1 / (1 + (k/k0)^2)`` on the initial spectral weights, so that the modes with little signal
     start small (``k0`` is the wavenumber at which the weights have dropped to one half)."""
     return 1.0 / (1.0 + (k / k0) ** 2)
+
+
+def resample_modes(height, width):
+    """
+    Number of ``(kh, kw)`` modes kept when resampling between two grids, ``height x width`` being the smaller one on
+    each axis: the modes strictly below the smaller grid's Nyquist frequency, ``height - 1`` along h for an even
+    ``height`` and all of them for an odd one, and ``width // 2`` (even) or ``width // 2 + 1`` (odd) along the half
+    spectrum of w. Dropping the Nyquist mode keeps the two directions exactly symmetric: it has no well-defined
+    place on a larger grid (it would have to be split over +-Nyquist), and a real field's Nyquist mode is a single
+    real coefficient, so nothing but the very finest checkerboard is lost.
+    """
+    keep_h = height - 1 if height % 2 == 0 else height
+    keep_w = width // 2 if width % 2 == 0 else width // 2 + 1
+    return keep_h, keep_w

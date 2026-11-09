@@ -160,6 +160,72 @@ propagation with mode truncation (arXiv 2310.06379 and 2507.21833); the serial r
 itself should follow it once it is settled, and the distributed model then inherits it through
 the rules above.
 
+## Fourier Down- and Up-Sampling
+
+The activation memory of a block is `~33 C` bf16 tensors per grid point, so it scales with the number of grid points
+the block runs on. Truncating the modes **inside** a spectral layer does not change that, and it should not be
+mistaken for a memory lever on the other layers: it keeps the layer's own saved tensor small (measured for one layer
+at `b=4, C=16, 1024^2`: 0.002 GB kept for backward with 64x64 modes against 0.250 GB for the full spectrum, and 8 MB
+of weights against 1.0 GB), but the skip path, the channel MLP and the GELUs stay at the grid size.
+
+`downsample = f` (`config/FNO.yaml`, serial and distributed) runs the blocks on a latent grid `f` times coarser per
+axis, an `f^2` reduction:
+
+```text
+lift (full grid, lift_dim channels) -> Fourier downsample -> widen to embed_dim -> blocks on the latent grid
+  -> narrow to lift_dim -> Fourier upsample (+ the lift, if resample_skip) -> project (full grid)
+```
+
+- **The operator** (`networks.fno.FourierResample`, `distributed.resample.DistributedFourierResample`) truncates or
+  zero-pads the spectrum and preserves values (a constant stays that constant; a field below the coarse grid's Nyquist
+  frequency is sampled or interpolated exactly). Only modes strictly below the coarser grid's Nyquist frequency are
+  kept, so the two directions are exactly symmetric and no Nyquist mode has to be split. Distributed, it is a pencil
+  FFT on the input grid followed by an inverse pencil FFT on the output grid; the two keep the same `(kh, kw)` modes,
+  so the spectrum layout is already the same on both sides.
+- **The full-grid skip** carries the wavenumbers above the latent Nyquist frequency, which the latent path cannot
+  represent. The few-channel full-grid layers are cheap (`lift_dim = 16` to 32).
+- **`downsample = 1` is the existing model**, with the same parameters and the same results.
+- **Constraints:** `downsample` divides the image size; the latent grid, the retained modes, `lift_dim` and `embed_dim`
+  are at least `sp1` and `sp2` (the pencil FFTs split the channels too).
+
+Measured on one GPU's share of a 4096^2 image on 16 GPUs (`sp = 4x4`: a 1024^2 tile and a 16th of the modes),
+single rank, bf16 autocast, after the saved-tensor fixes below. The weights, gradients and Adam state, the all-to-all
+buffers and the NCCL, cuFFT and CUDA context memory come on top (about 10 GB in the first 16-GPU job):
+
+| Config | Saved after forward | Peak incl. backward |
+|---|---:|---:|
+| `mp`: `C=16`, full grid, batch 8 | 8.66 GB | 9.82 GB |
+| `mp_resample`: `C=64`, `downsample=2`, batch 8 | 8.97 GB | 10.23 GB |
+| `C=128`, `downsample=2`, batch 8 | 16.32 GB | 19.23 GB |
+| `embed_large`: `C=2048`, `downsample=4`, batch 1 | 10.08 GB | 12.24 GB |
+| `C=2048`, `downsample=4`, batch 2 | 17.70 GB | 21.47 GB |
+| `C=2048`, `downsample=2`, batch 1 | 31.85 GB | 39.26 GB, does not fit |
+
+`downsample=2` gives a 4x wider model at the memory of the full-grid one. 2048 channels need `downsample=4`: at
+`downsample=2` the latent tile alone is too large. Estimated communication: the large transposes (T1 and T8) carry
+`C x (latent points)`, which for `mp_resample` equals the full-grid config and for `embed_large` is about 6 GB sent per
+GPU per step (4 layers, forward and backward, 0.4 GB per large transposition at batch 1), plus the two
+full-grid resampling transposes of the few-channel field. Not measured on NCCL.
+
+**The large config and tensor parallelism.** The spectral weights are `n x C^2 x kh x kw` complex, 1600 times the
+pointwise weights at 64x64 modes. They are sharded over the spatial groups, and over nothing else. At `C = 2048` with
+the 16x16 modes of `embed_large` they are 34 GB in total, 2.1 GB per GPU at `sp = 4x4`, and 8.6 GB with gradients and
+Adam state. Tensor parallelism as implemented shards only the pointwise MLP, which does not help the weights, and
+would add an all-reduce of a latent-grid activation per row-parallel layer; sharding the spectral weights over `tp`
+(over the output channels, with an all-gather of the *truncated* spectrum, which is small) is a design change that
+becomes worthwhile around `C = 1024` with many modes, and is not part of this change. `embed_large` therefore
+launches with `--tp=1 --sp1=4 --sp2=4`.
+
+**Saved tensors in the spectral layers.** While measuring this, autograd turned out to keep two full-grid copies per
+spectral layer that the math does not need: `torch.fft.rfft2` and `rfft` save their real input although their backward
+only needs its shape (one fp32 copy of the activation per layer), and `torch.complex(real, imag)`, used to zero the
+imaginary part of the self-conjugate columns, saves both of its inputs (the whole complex field once more). Together
+about four bf16 activations per layer, a fifth to a quarter of everything the FNO saves: 10.75 to 8.66 GB for `mp` and
+12.35 to 8.97 GB for `mp_resample` with both removed (not re-measured with only the mask fix). The mask is now applied on the real view, which keeps nothing.
+The FFTs are left as plain `torch.fft` calls: avoiding their saved input needs a custom `autograd.Function`, which is
+not worth the complexity in a tutorial, especially since the spectral blocks run on the coarse latent grid when the
+FNO downsamples. `tests/test_spectral_memory.py` checks that a layer keeps no more than this one copy.
+
 ## Topology Handoff
 
 | Field | Planned value |
@@ -273,6 +339,7 @@ Risks:
 ## Affected Files and Model Boundaries
 
 - `networks/fno_mp.py`: spectral layer, pointwise layers, model, metadata.
+- `distributed/resample.py`, `networks/fno.py` (`FourierResample`): Fourier resampling, serial and distributed.
 - `distributed/fft.py`, `distributed/helpers.py`, `distributed/mappings.py`: pencil FFT, `_transpose`, `distributed_transpose`.
 - `networks/vit_mp.py`: shared `MLP` layers with a `layout` argument.
 - `train_mp.py`: network selection, the sharded loss and metrics, the plot gather and the non-fused optimizer choice.
@@ -288,7 +355,8 @@ Risks:
 4. Verify the self-conjugate (DC and Nyquist) handling against a CPU `irfft2` reference, on GPU.
 5. Measure peak allocated/reserved CUDA memory and NVML high-water marks, including cuFFT workspaces.
 6. Benchmark samples/second against pure DP; do not claim a throughput improvement without measurement.
-7. Check the sharded interface: the loader shards of all spatial ranks tile the image and equal the full loader's slices (both loaders), `mse_loss` and `rmse_spatial` on the shards equal the plain MSE and RMSE of the full fields, and the gradient with respect to each shard equals the corresponding slice of the full gradient, on every mesh in the scale plan.
+7. Check the resampling: the distributed operator against the serial one on shards in both directions on uneven grids, with the gradients (`tests/test_resample_dist.py`), the exact sampling and interpolation of band-limited fields (`tests/test_fno_resample.py`), and the downsampled model against the serial one for outputs and every parameter gradient (`tests/test_fno_model.py`, `tests/test_fno_ddp.py`).
+7b. Check the sharded interface: the loader shards of all spatial ranks tile the image and equal the full loader's slices (both loaders), `mse_loss` and `rmse_spatial` on the shards equal the plain MSE and RMSE of the full fields, and the gradient with respect to each shard equals the corresponding slice of the full gradient, on every mesh in the scale plan.
 8. Check initialization equivalence, separately from the weight-copying checks above: build the serial and distributed models, compare the per-parameter weight and bias statistics (gathered over the shards) and the per-layer activation and gradient scale at initialization, on every mesh in the scale plan, and compare the loss curves over a few hundred iterations on a small problem. Statistical agreement, not bitwise. `tests/test_fno_init.py` does this: per-parameter statistics within about 5 sigma of the sampling error of their size (so tiny parameters are only bounds), replicated parameters identical over their `shared` groups, and, over 15 draws each, the median output std and `lift.fc1` gradient norm of the distributed model within a factor of 2 of the serial one. Single networks cannot be compared: at this depth the output std of one draw varies by more than 10x between seeds, in both models.
 
 ## Alternatives Considered
