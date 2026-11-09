@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from numbers import Integral
 from typing import Sequence, Tuple
 
 from distributed.helpers import compute_split_shapes
@@ -81,6 +82,35 @@ def make_vit_spatial_shard(
         h_rank=sp1_rank,
         w_rank=sp2_rank,
     )
+
+
+def make_convnext_spatial_shard(
+    global_shape: Sequence[int],
+    patch_size: int,
+    sp1_size: int,
+    sp1_rank: int,
+    sp2_size: int,
+    sp2_rank: int,
+    order: str,
+    kernel_size: int = 7,
+    tp_size: int = 1,
+) -> MeshSpatialShard:
+    """Partition a ConvNeXt patch grid with enough cells for neighboring halos."""
+    if tp_size != 1:
+        raise ValueError("ConvNeXt supports spatial parallelism only; use tp=1")
+    for name, value in (("patch_size", patch_size), ("kernel_size", kernel_size)):
+        if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+    if kernel_size % 2 == 0:
+        raise ValueError("kernel_size must be odd")
+    shard = make_vit_spatial_shard(
+        global_shape, patch_size, sp1_size, sp1_rank, sp2_size, sp2_rank, order,
+    )
+    halo = (kernel_size - 1) // 2
+    for group, splits in (("sp1", shard.h_splits), ("sp2", shard.w_splits)):
+        if len(splits) > 1 and min(splits) // patch_size < halo:
+            raise ValueError(f"ConvNeXt {group} needs at least {halo} feature cells per tile")
+    return shard
 
 
 def make_grid_spatial_shard(

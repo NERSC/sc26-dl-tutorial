@@ -314,3 +314,36 @@ def _distributed_roll(input_, shift, dim, comm_name):
         return torch.cat((recv_buffer, rolled[tuple(keep)]), dim=dim)
     keep[dim] = slice(None, -width)
     return torch.cat((rolled[tuple(keep)], recv_buffer), dim=dim)
+
+
+def _exchange_halo_edges(left_send, right_send, comm_name):
+    """Send just the boundary strips, with no wraparound at global edges.
+
+    For rank 1 of four, counts are [edge_size, 0, edge_size, 0]. Neighboring
+    strips have matching shapes even when the tiles have unequal core widths.
+    The caller must validate that every tile is at least as wide as the halo.
+    """
+    rank = comm.get_rank(comm_name)
+    size = comm.get_size(comm_name)
+    edge_size = left_send.numel()
+    counts = [0] * size
+    edges = []
+    # Materialize packed edges: compiled convolution gradients can have a
+    # different layout from the forward activations, especially for thin halos.
+    if rank > 0:
+        counts[rank - 1] = edge_size
+        edges.append(left_send.clone(memory_format=torch.contiguous_format).view(-1))
+    if rank + 1 < size:
+        counts[rank + 1] = edge_size
+        edges.append(right_send.clone(memory_format=torch.contiguous_format).view(-1))
+    packed = torch.cat(edges)
+    received = torch.empty_like(packed)
+    dist.all_to_all_single(
+        received, packed,
+        output_split_sizes=counts, input_split_sizes=counts,
+        group=comm.get_group(comm_name),
+    )
+    left_count = edge_size if rank > 0 else 0
+    left = received[:left_count].view_as(left_send) if rank > 0 else None
+    right = received[left_count:].view_as(right_send) if rank + 1 < size else None
+    return left, right

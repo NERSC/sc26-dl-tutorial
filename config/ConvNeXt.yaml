@@ -1,0 +1,40 @@
+# Single-GPU model
+small: &small
+  network: 'convnext'
+  model_backend: 'pytorch'
+  patch_size: 32
+  embed_dim: 512
+  depth: 12
+  kernel_size: 7
+  layer_scale_init: 1.0e-6
+
+  img_size: [4096, 4096]
+  dt: 1
+  global_batch_size: 4
+  num_iters: 4096
+  amp_mode: bf16
+  enable_fused: true
+  enable_jit: false
+  expdir: '/logs'
+  lr: 5E-4
+
+  data_loader_config: 'dali'
+  num_data_workers: 2
+  spatial_read_mode: 'local'
+  n_in_channels: 2
+  n_out_channels: 2
+  data_path: '/data'
+  stats_path: '/data/stats_trajectory.h5'
+  limit_nsamples: 1024
+  limit_nsamples_val: 32
+
+  wireup_info: env
+  wireup_store: tcp
+
+big:
+  <<: *small
+  patch_size: 16
+  embed_dim: 1536
+  depth: 16
+  global_batch_size: 4
+  num_iters: 768
