@@ -1,6 +1,6 @@
 #!/bin/bash
 
-image=nersc/pytorch:25.06.01
+image=nersc/pytorch:26.07.01
 dp=1
 tp=1
 sp1=1
@@ -34,9 +34,10 @@ fi
 ngpu_per_node=$(( (${tp} * ${sp1} * ${sp2} * ${dp})/$nodes ))
 export MASTER_ADDR=$(hostname)
 set -x
-srun -l --nodes $nodes --ntasks-per-node $ngpu_per_node --gpus-per-node $ngpu_per_node -u shifter --image=$image --module=gpu,nccl-plugin \
+srun -l --nodes $nodes --ntasks-per-node $ngpu_per_node --gpus-per-node $ngpu_per_node -u shifter --image=$image --module=gpu,nccl-cu13-plugin \
     bash -c "
     source export_DDP_vars.sh
+    unset NCCL_NET_PLUGIN
     export NVIDIA_TF32_OVERRIDE=0
     export TP=${tp}
     export SP1=${sp1}
