@@ -24,10 +24,11 @@ from utils import comm
 from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
 from distributed.spatial_sharding import (
+    make_convnext_spatial_shard,
     make_swin_spatial_shard,
     make_vit_spatial_shard,
 )
-from networks import swin_mp, vit_mp
+from networks import convnext_mp, swin_mp, vit_mp
 
 from distributed.mappings import (
     allgather_forward_split_backward,
@@ -46,6 +47,8 @@ def build_model(params, spatial_shard):
         if params.model_backend != "pytorch":
             raise ValueError("Swin only supports the pytorch backend")
         return swin_mp.Swin(params, spatial_shard=spatial_shard)
+    if network == "convnext":
+        return convnext_mp.ConvNeXt(params, spatial_shard=spatial_shard)
     raise ValueError(f"unknown network {network!r}")
 
 
@@ -190,9 +193,10 @@ def train(
     iters = 0
     startEpoch = 0
 
-    if params.lr_schedule == 'cosine':
-        if params.warmup > 0:
-            lr_scale = lambda x: min((x+1)/params.warmup, 0.5*(1 + np.cos(np.pi*x/params.num_iters)))
+    if params.get("lr_schedule", "cosine") == 'cosine':
+        warmup = params.get("warmup", 0)
+        if warmup > 0:
+            lr_scale = lambda x: min((x+1)/warmup, 0.5*(1 + np.cos(np.pi*x/params.num_iters)))
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
         else:
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params.num_iters)
@@ -529,7 +533,14 @@ if __name__ == '__main__':
         "sp2_rank": comm.get_rank("sp2"),
         "order": params.get("order", "tp-sp1-sp2-dp"),
     }
-    if params.get("network", params.get("model", "vit")).lower() == "swin":
+    network = params.get("network", params.get("model", "vit")).lower()
+    if network == "convnext":
+        spatial_shard = make_convnext_spatial_shard(
+            kernel_size=params.get("kernel_size", 7),
+            tp_size=comm.get_size("tp"),
+            **shard_kwargs,
+        )
+    elif network == "swin":
         spatial_shard = make_swin_spatial_shard(
             window_size=params.window_size,
             **shard_kwargs,
