@@ -6,21 +6,31 @@ class YParams:
     """Yaml file parser"""
 
     def __init__(self, yaml_filename, config_name, print_params=False):
-        self._yaml_filename = yaml_filename
-        self._config_name = config_name
-        self.params = {}
+        object.__setattr__(self, "_yaml_filename", yaml_filename)
+        object.__setattr__(self, "_config_name", config_name)
+        object.__setattr__(self, "params", {})
 
         with open(yaml_filename) as _file:
-
             for key, val in YAML().load(_file)[config_name].items():
                 if val == "None":
                     val = None
 
                 self.params[key] = val
-                self.__setattr__(key, val)
 
         if print_params:
             self.log()
+
+    def __getattr__(self, key):
+        try:
+            return self.params[key]
+        except KeyError:
+            raise AttributeError(key) from None
+
+    def __setattr__(self, key, val):
+        if key.startswith("_") or key == "params":
+            object.__setattr__(self, key, val)
+        else:
+            self.params[key] = val
 
     def __getitem__(self, key):
         return self.params[key]
@@ -30,10 +40,7 @@ class YParams:
 
     def get(self, key, default=None):
         """Get a parameter value"""
-        if hasattr(self, key):
-            return getattr(self, key)
-        else:
-            return self.params.get(key, default)
+        return self.params.get(key, default)
 
     def log(self):
         logging.info("------------------ Configuration ------------------")
@@ -45,5 +52,3 @@ class YParams:
 
     def update(self, new_params):
         self.params.update(new_params)
-        for key, val in new_params.items():
-            self.__setattr__(key, val)

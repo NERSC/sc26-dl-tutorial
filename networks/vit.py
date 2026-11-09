@@ -2,7 +2,7 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 from functools import partial
-from networks.helpers import DropPath, trunc_normal_
+from networks.helpers import trunc_normal_
 
 class MLP(nn.Module):
     def __init__(
@@ -59,7 +59,7 @@ class Attention(nn.Module):
                 q,
                 k,
                 v,
-                dropout_p=self.attn_drop.p,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
             )
         else:
             q = q * self.scale
@@ -83,7 +83,6 @@ class Block(nn.Module):
         qkv_bias=False,
         drop=0.0,
         attn_drop=0.0,
-        drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
     ):
@@ -91,7 +90,6 @@ class Block(nn.Module):
 
         mlp_hidden_dim = int(dim * mlp_ratio)
 
-        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm1 = norm_layer(dim)
         self.norm2 = norm_layer(dim)
         self.attn = Attention(
@@ -111,9 +109,9 @@ class Block(nn.Module):
     def forward(self, x):
         with torch.cuda.nvtx.range("attention"):
             y = self.attn(self.norm1(x))
-            x = x + self.drop_path(y)
+            x = x + y
         with torch.cuda.nvtx.range("mlp"):
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            x = x + self.mlp(self.norm2(x))
         return x
 
 
@@ -154,7 +152,6 @@ class VisionTransformer(nn.Module):
         qkv_bias=False,
         drop_rate=0.0,
         attn_drop_rate=0.0,
-        drop_path_rate=0.0,
         norm_layer=nn.LayerNorm,
         **kwargs
     ):
@@ -176,10 +173,6 @@ class VisionTransformer(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, self.embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
-        dpr = [
-            x.item() for x in torch.linspace(0, drop_path_rate, depth)
-        ]  # stochastic depth decay rule
-
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -189,7 +182,6 @@ class VisionTransformer(nn.Module):
                     qkv_bias=qkv_bias,
                     drop=drop_rate,
                     attn_drop=attn_drop_rate,
-                    drop_path=dpr[i],
                     norm_layer=norm_layer,
                 )
                 for i in range(depth)
@@ -259,7 +251,6 @@ def ViT(params, **kwargs):
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        drop_path_rate=float(params.dropout),
         drop_rate=float(params.dropout),
         attn_drop_rate=float(params.dropout),
         **kwargs

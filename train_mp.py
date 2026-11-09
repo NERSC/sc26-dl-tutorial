@@ -102,8 +102,12 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
             output_device=local_rank,
         )
 
-    # fused Adam does not support complex parameters, such as the FNO's spectral weights
-    use_fused = not any(p.is_complex() for p in model.parameters())
+    use_fused = bool(params.enable_fused)
+    if use_fused and any(p.is_complex() for p in model.parameters()):
+        raise ValueError(
+            "enable_fused=true is incompatible with complex parameters such as "
+            "the FNO's spectral weights; set enable_fused=false"
+        )
     optimizer = optim.Adam(
         model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
     )
@@ -132,12 +136,23 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
         )
         logging.info(f"Scaffolding memory high watermark: {all_mem_gb} GB.")
 
-    warmup_steps = 100
-    lr_scale = lambda step: min(
-        (step + 1) / warmup_steps,
-        0.5 * (1 + np.cos(np.pi * step / params.num_iters)),
-    )
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
+    if str(params.lr_schedule).lower() != "cosine":
+        raise ValueError(
+            f"lr_schedule must be 'cosine', got {params.lr_schedule!r}"
+        )
+    warmup_steps = int(params.warmup)
+    if warmup_steps < 0:
+        raise ValueError(f"warmup must be non-negative, got {warmup_steps}")
+    if warmup_steps > 0:
+        lr_scale = lambda step: min(
+            (step + 1) / warmup_steps,
+            0.5 * (1 + np.cos(np.pi * step / params.num_iters)),
+        )
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=params.num_iters
+        )
 
     def loss_func(pred, target):
         return mse_loss(pred, target, spatial_shard.global_shape)
@@ -190,7 +205,18 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
                 "RMSE(field_0)/valid", val_rmse.cpu().numpy()[0], 0
             )
 
-    params.num_epochs = params.num_iters // len(train_data_loader)
+    steps_per_epoch = len(train_data_loader)
+    if steps_per_epoch == 0:
+        raise ValueError(
+            "training data loader has no full batches; increase the dataset size "
+            "or reduce local_batch_size"
+        )
+    params.num_epochs = params.num_iters // steps_per_epoch
+    if params.num_epochs < 1:
+        raise ValueError(
+            f"num_iters ({params.num_iters}) must cover at least one full epoch "
+            f"({steps_per_epoch} steps)"
+        )
     iters = 0
     for epoch in range(params.num_epochs):
         torch.cuda.synchronize()  # device sync to ensure accurate epoch timings

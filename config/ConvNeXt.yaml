@@ -16,7 +16,10 @@ small: &small
   enable_fused: true
   enable_jit: false
   expdir: '/logs'
+  lr_schedule: 'cosine'
   lr: 5E-4
+  warmup: 0
+  optimizer: 'Adam'
 
   data_loader_config: 'dali'
   num_data_workers: 2

@@ -1,4 +1,3 @@
-import sys
 import os
 import time
 import gc
@@ -7,12 +6,9 @@ import argparse
 import pynvml
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torch.cuda.amp import autocast, GradScaler
-import torch.multiprocessing
 from torch.utils.tensorboard import SummaryWriter
-from torch.nn.parallel import DistributedDataParallel
 from torch.distributed import ReduceOp
 
 import logging
@@ -25,10 +21,11 @@ from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
 from distributed.spatial_sharding import (
     make_convnext_spatial_shard,
+    make_grid_spatial_shard,
     make_swin_spatial_shard,
     make_vit_spatial_shard,
 )
-from networks import convnext_mp, swin_mp, vit_mp
+from networks import convnext_mp, fno_mp, swin_mp, vit_mp
 
 from distributed.mappings import (
     allgather_forward_split_backward,
@@ -41,6 +38,8 @@ from utils.plots import generate_images
 
 def build_model(params, spatial_shard):
     network = params.get("network", params.get("model", "vit")).lower()
+    if network == "fno":
+        return fno_mp.FNO(params)
     if network == "vit":
         return vit_mp.ViT(params, spatial_shard=spatial_shard)
     if network == "swin":
@@ -123,10 +122,9 @@ def capture_model(
 
 def train(
     params,
-    args,
+    writer,
     local_rank,
     world_rank,
-    world_size,
     spatial_shard,
 ):
     # set device and benchmark mode
@@ -134,20 +132,32 @@ def train(
     torch.cuda.set_device(local_rank)
     device = torch.device('cuda:%d'%local_rank)
 
+    amp_mode = str(params.get("amp_mode", "none")).lower()
+    if amp_mode not in {"none", "fp16", "bf16"}:
+        raise ValueError(
+            f"amp_mode must be 'none', 'fp16', or 'bf16', got {amp_mode!r}"
+        )
+    params.amp_enabled = amp_mode != "none"
+    params.amp_dtype = (
+        torch.float16 if amp_mode == "fp16"
+        else torch.bfloat16 if amp_mode == "bf16"
+        else torch.float32
+    )
+
     # init pynvml and get handle
     pynvml.nvmlInit()
     nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(device.index)
 
     # get data loader
     logging.info('rank %d, begin data loader init'%world_rank)
-    train_data_loader, train_dataset, train_sampler = get_data_loader_distributed(
+    train_data_loader, _, train_sampler = get_data_loader_distributed(
         params,
         params.data_path,
         params.distributed,
         train=True,
         spatial_shard=spatial_shard,
     )
-    val_data_loader, valid_dataset = get_data_loader_distributed(
+    val_data_loader, _ = get_data_loader_distributed(
         params,
         params.data_path,
         params.distributed,
@@ -162,6 +172,13 @@ def train(
     if params.enable_jit:
         model = torch.compile(model)
 
+    has_complex_parameters = any(p.is_complex() for p in model.parameters())
+    if params.amp_dtype == torch.float16 and has_complex_parameters:
+        raise ValueError(
+            "amp_mode 'fp16' cannot unscale complex parameters such as the "
+            "FNO's spectral weights; use 'bf16' or 'none'"
+        )
+
     if params.amp_dtype == torch.float16: 
         scaler = GradScaler()
     else:
@@ -175,8 +192,7 @@ def train(
     if params.distributed:
         with torch.cuda.stream(capture_stream):
             model = init_ddp_model_and_reduction_hooks(model, device_ids=[local_rank],
-                                                    output_device=[local_rank],
-                                                    bucket_cap_mb=args.bucket_cap_mb)
+                                                    output_device=local_rank)
     capture_stream.synchronize()
 
 
@@ -185,23 +201,33 @@ def train(
         all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (1024. * 1024. * 1024.)
         logging.info(f"Scaffolding memory high watermark: {all_mem_gb} GB.")
 
-    if params.enable_fused:
-        optimizer = optim.Adam(model.parameters(), lr = params.lr, fused=True, betas=(0.9, 0.95))
-    else:
-        optimizer = optim.Adam(model.parameters(), lr = params.lr, betas=(0.9, 0.95))
+    use_fused = bool(params.enable_fused)
+    if use_fused and has_complex_parameters:
+        raise ValueError(
+            "enable_fused=true is incompatible with complex parameters such as "
+            "the FNO's spectral weights; set enable_fused=false"
+        )
+    optimizer = optim.Adam(
+        model.parameters(), lr=params.lr, fused=use_fused, betas=(0.9, 0.95)
+    )
 
-    iters = 0
-    startEpoch = 0
-
-    if params.get("lr_schedule", "cosine") == 'cosine':
-        warmup = params.get("warmup", 0)
-        if warmup > 0:
-            lr_scale = lambda x: min((x+1)/warmup, 0.5*(1 + np.cos(np.pi*x/params.num_iters)))
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
-        else:
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=params.num_iters)
+    if str(params.lr_schedule).lower() != "cosine":
+        raise ValueError(
+            f"lr_schedule must be 'cosine', got {params.lr_schedule!r}"
+        )
+    warmup_steps = int(params.warmup)
+    if warmup_steps < 0:
+        raise ValueError(f"warmup must be non-negative, got {warmup_steps}")
+    if warmup_steps > 0:
+        lr_scale = lambda step: min(
+            (step + 1) / warmup_steps,
+            0.5 * (1 + np.cos(np.pi * step / params.num_iters)),
+        )
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_scale)
     else:
-        scheduler = None
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=params.num_iters
+        )
 
     def loss_func(pred, target):
         return mse_loss(pred, target, spatial_shard.global_shape)
@@ -252,22 +278,29 @@ def train(
             torch.distributed.all_reduce(val_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
             torch.distributed.all_reduce(val_rmse, op=ReduceOp.AVG, group=comm.get_group("dp"))
         if world_rank==0:
-            args.tboard_writer.add_scalar('Loss/train', tr_loss.item(), 0)
-            args.tboard_writer.add_scalar('Loss/valid', val_loss.item(), 0)
-            args.tboard_writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], 0)
+            writer.add_scalar('Loss/train', tr_loss.item(), 0)
+            writer.add_scalar('Loss/valid', val_loss.item(), 0)
+            writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], 0)
 
-    params.num_epochs = params.num_iters//len(train_data_loader)
+    steps_per_epoch = len(train_data_loader)
+    if steps_per_epoch == 0:
+        raise ValueError(
+            "training data loader has no full batches; increase the dataset size "
+            "or reduce local_batch_size"
+        )
+    params.num_epochs = params.num_iters // steps_per_epoch
+    if params.num_epochs < 1:
+        raise ValueError(
+            f"num_iters ({params.num_iters}) must cover at least one full epoch "
+            f"({steps_per_epoch} steps)"
+        )
     iters = 0
-    t1 = time.time()
-    for epoch in range(startEpoch, startEpoch + params.num_epochs):
+    for epoch in range(params.num_epochs):
         torch.cuda.synchronize() # device sync to ensure accurate epoch timings
         if params.distributed and (train_sampler is not None):
             train_sampler.set_epoch(epoch)
         start = time.time()
         tr_loss = []
-        tr_time = 0.
-        dat_time = 0.
-        log_time = 0.
 
         model.train()
         step_count = 0
@@ -280,12 +313,8 @@ def train(
 
             with torch.cuda.nvtx.range(f"step {i}"):
                 iters += 1
-                dat_start = time.time()
                 with torch.cuda.nvtx.range(f"data copy in {i}"):
                     inp, tar = map(lambda x: x.to(device), data)
-
-                tr_start = time.time()
-                b_size = inp.size(0)
 
                 static_input.copy_(inp)
                 static_label.copy_(tar)
@@ -311,9 +340,6 @@ def train(
             # lr step
             scheduler.step()
 
-            tr_end = time.time()
-            tr_time += tr_end - tr_start
-            dat_time += tr_start - dat_start
             step_count += 1
 
         torch.cuda.synchronize() # device sync to ensure accurate epoch timings
@@ -329,12 +355,12 @@ def train(
             logging.info('Time taken for epoch %i is %f sec, avg %f samples/sec',
                          epoch + 1, end - start, samples_per_sec)
             logging.info('  Avg train loss=%f'%np.mean(tr_loss))
-            args.tboard_writer.add_scalar('Loss/train', np.mean(tr_loss), iters)
-            args.tboard_writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], iters)
-            args.tboard_writer.add_scalar('Avg iters per sec', iters_per_sec, iters)
-            args.tboard_writer.add_scalar('Avg samples per sec', samples_per_sec, iters)
+            writer.add_scalar('Loss/train', np.mean(tr_loss), iters)
+            writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], iters)
+            writer.add_scalar('Avg iters per sec', iters_per_sec, iters)
+            writer.add_scalar('Avg samples per sec', samples_per_sec, iters)
             fig = generate_images(plot_fields)
-            args.tboard_writer.add_figure('Visualization, field_2', fig, iters, close=True)
+            writer.add_figure('Visualization, field_2', fig, iters, close=True)
 
         val_start = time.time()
         val_loss = torch.zeros(1, device=device)
@@ -362,13 +388,11 @@ def train(
         if world_rank==0:
             logging.info('  Avg val loss={}'.format(val_loss.item()))
             logging.info('  Total validation time: {} sec'.format(val_end - val_start)) 
-            args.tboard_writer.add_scalar('Loss/valid', val_loss, iters)
-            args.tboard_writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], iters)
-            args.tboard_writer.flush()
+            writer.add_scalar('Loss/valid', val_loss, iters)
+            writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], iters)
+            writer.flush()
 
     torch.cuda.synchronize()
-    t2 = time.time()
-    tottime = t2 - t1
     pynvml.nvmlShutdown()
 
 
@@ -388,52 +412,6 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--config", default="base", type=str, help="name of desired config in yaml file"
-    )
-    parser.add_argument(
-        "--amp_mode",
-        default="none",
-        type=str,
-        choices=["none", "fp16", "bf16"],
-        help="select automatic mixed precision mode",
-    )
-    parser.add_argument(
-        "--enable_fused", action="store_true", help="enable fused Adam optimizer"
-    )
-    parser.add_argument(
-        "--enable_jit", action="store_true", help="enable JIT compilation"
-    )
-    parser.add_argument(
-        "--local_batch_size",
-        default=None,
-        type=int,
-        help="local batchsize (manually override global_batch_size config setting)",
-    )
-    parser.add_argument(
-        "--num_iters", default=None, type=int, help="number of iters to run"
-    )
-    parser.add_argument(
-        "--num_data_workers",
-        default=None,
-        type=int,
-        help="number of data workers for data loader",
-    )
-    parser.add_argument(
-        "--data_loader_config",
-        default=None,
-        type=str,
-        choices=["pytorch", "dali"],
-        help="dataloader configuration. choices: 'pytorch', 'dali'",
-    )
-    parser.add_argument(
-        "--bucket_cap_mb", default=25, type=int, help="max message bucket size in mb"
-    )
-    parser.add_argument(
-        "--disable_broadcast_buffers",
-        action="store_true",
-        help="disable syncing broadcasting buffers",
-    )
-    parser.add_argument(
-        "--noddp", action="store_true", help="disable DDP communication"
     )
 
     # model parallelism arguments
@@ -462,36 +440,21 @@ if __name__ == '__main__':
         help="Order of ranks for parallelism",
     )
 
+    parser.add_argument(
+        "--expdir",
+        default=None,
+        type=str,
+        help="output directory for logs and TensorBoard files, overrides expdir of the config. "
+        "Inside the container, so it has to be below a mounted path such as /logs",
+    )
     args = parser.parse_args()
 
 
     run_num = args.run_num
 
     params = YParams(os.path.abspath(args.yaml_config), args.config)
-
-    # Update config with modified args
-    # set up amp
-    if args.amp_mode != 'none':
-        params.update({"amp_mode": args.amp_mode})
-    amp_dtype = torch.float32
-    if params.amp_mode == "fp16":
-        amp_dtype = torch.float16
-    elif params.amp_mode == "bf16":
-        amp_dtype = torch.bfloat16    
-    params.update({"amp_enabled": amp_dtype is not torch.float32,
-                    "amp_dtype" : amp_dtype, 
-                    "enable_fused" : args.enable_fused,
-                    "enable_jit" : args.enable_jit
-                    })
-
-    if args.data_loader_config:
-        params.update({"data_loader_config" : args.data_loader_config})
-
-    if args.num_iters:
-        params.update({"num_iters" : args.num_iters})
-
-    if args.num_data_workers:
-        params.update({"num_data_workers" : args.num_data_workers})
+    if args.expdir is not None:
+        params.expdir = args.expdir
 
     params.distributed = False
 
@@ -513,40 +476,45 @@ if __name__ == '__main__':
         params["global_batch_size"] % comm.get_size("dp") == 0
     ), f"Error, cannot evenly distribute {params['global_batch_size']} across {comm.get_size('dp')} GPU."
 
-    if args.local_batch_size:
-        # Manually override batch size
-        params.local_batch_size = args.local_batch_size
-        params.update({"global_batch_size" : comm.get_size("dp") * args.local_batch_size})
-    else:
-        # Compute local batch size based on number of ranks
-        params.local_batch_size = int(params["global_batch_size"] // comm.get_size("dp"))
+    params.local_batch_size = int(
+        params["global_batch_size"] // comm.get_size("dp")
+    )
 
     # for data loader, set the actual number of data shards and id
     params.data_num_shards = comm.get_size("dp")
     params.data_shard_id = comm.get_rank("dp")
-    shard_kwargs = {
-        "global_shape": params.img_size,
-        "patch_size": params.patch_size,
-        "sp1_size": comm.get_size("sp1"),
-        "sp1_rank": comm.get_rank("sp1"),
-        "sp2_size": comm.get_size("sp2"),
-        "sp2_rank": comm.get_rank("sp2"),
-        "order": params.get("order", "tp-sp1-sp2-dp"),
-    }
     network = params.get("network", params.get("model", "vit")).lower()
-    if network == "convnext":
-        spatial_shard = make_convnext_spatial_shard(
-            kernel_size=params.get("kernel_size", 7),
-            tp_size=comm.get_size("tp"),
-            **shard_kwargs,
-        )
-    elif network == "swin":
-        spatial_shard = make_swin_spatial_shard(
-            window_size=params.window_size,
-            **shard_kwargs,
+    if network == "fno":
+        spatial_shard = make_grid_spatial_shard(
+            global_shape=params.img_size,
+            sp1_size=comm.get_size("sp1"),
+            sp1_rank=comm.get_rank("sp1"),
+            sp2_size=comm.get_size("sp2"),
+            sp2_rank=comm.get_rank("sp2"),
         )
     else:
-        spatial_shard = make_vit_spatial_shard(**shard_kwargs)
+        shard_kwargs = {
+            "global_shape": params.img_size,
+            "patch_size": params.patch_size,
+            "sp1_size": comm.get_size("sp1"),
+            "sp1_rank": comm.get_rank("sp1"),
+            "sp2_size": comm.get_size("sp2"),
+            "sp2_rank": comm.get_rank("sp2"),
+            "order": params.get("order", "tp-sp1-sp2-dp"),
+        }
+        if network == "convnext":
+            spatial_shard = make_convnext_spatial_shard(
+                kernel_size=params.get("kernel_size", 7),
+                tp_size=comm.get_size("tp"),
+                **shard_kwargs,
+            )
+        elif network == "swin":
+            spatial_shard = make_swin_spatial_shard(
+                window_size=params.window_size,
+                **shard_kwargs,
+            )
+        else:
+            spatial_shard = make_vit_spatial_shard(**shard_kwargs)
 
     # Set up directory
     baseDir = params.expdir
@@ -557,25 +525,29 @@ if __name__ == '__main__':
         + str(run_num)
         + "/",
     )
+    writer = None
     if world_rank==0:
         if not os.path.isdir(expDir):
             os.makedirs(expDir)
         logging_utils.log_to_file(logger_name=None, log_filename=os.path.join(expDir, 'out.log'))
         params.log()
-        args.tboard_writer = SummaryWriter(log_dir=os.path.join(expDir, 'logs/'))
+        writer = SummaryWriter(log_dir=os.path.join(expDir, 'logs/'))
 
     params.experiment_dir = os.path.abspath(expDir)
 
     train(
         params,
-        args,
+        writer,
         local_rank,
         world_rank,
-        world_size,
         spatial_shard,
     )
 
-    if params.distributed:
+    if torch.distributed.is_initialized() and world_size > 1:
         torch.distributed.barrier()
     logging.info('DONE ---- rank %d'%world_rank)
+    if writer is not None:
+        writer.close()
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 

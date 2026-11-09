@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from distributed.mappings import roll_forward_reverseroll_backward
-from networks.helpers import DropPath, trunc_normal_
+from networks.helpers import trunc_normal_
 from networks.swin import window_partition, window_reverse
 from networks.vit_mp import (
     ColumnParallelLinear,
@@ -135,7 +135,6 @@ class Block(nn.Module):
         qkv_bias=False,
         drop=0.0,
         attn_drop=0.0,
-        drop_path=0.0,
         norm_layer=LayerNorm,
     ):
         super().__init__()
@@ -160,9 +159,6 @@ class Block(nn.Module):
             qkv_bias=qkv_bias,
             attn_drop=attn_drop,
             proj_drop=drop,
-        )
-        self.drop_path = (
-            DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         )
         self.norm2 = norm_layer(dim)
         self.mlp = MLP(
@@ -201,8 +197,8 @@ class Block(nn.Module):
                 dims=(1, 2),
                 comm_names=("sp1", "sp2"),
             )
-        x = shortcut + self.drop_path(x)
-        return x + self.drop_path(self.mlp(self.norm2(x)))
+        x = shortcut + x
+        return x + self.mlp(self.norm2(x))
 
 
 class PatchEmbed(nn.Module):
@@ -256,7 +252,6 @@ class DistributedSwinTransformer(nn.Module):
         qkv_bias=False,
         drop_rate=0.0,
         attn_drop_rate=0.0,
-        drop_path_rate=0.0,
         norm_layer=LayerNorm,
         *,
         spatial_shard,
@@ -303,7 +298,6 @@ class DistributedSwinTransformer(nn.Module):
             "reduce": [],
         }
         self.pos_drop = nn.Dropout(drop_rate)
-        drop_paths = torch.linspace(0, drop_path_rate, depth).tolist()
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -325,7 +319,6 @@ class DistributedSwinTransformer(nn.Module):
                     qkv_bias=qkv_bias,
                     drop=drop_rate,
                     attn_drop=attn_drop_rate,
-                    drop_path=drop_paths[index],
                     norm_layer=norm_layer,
                 )
                 for index in range(depth)
@@ -396,7 +389,6 @@ def Swin(params, spatial_shard, **kwargs):
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(LayerNorm, eps=1e-6),
-        drop_path_rate=float(params.dropout),
         drop_rate=float(params.dropout),
         attn_drop_rate=float(params.dropout),
         spatial_shard=spatial_shard,
