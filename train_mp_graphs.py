@@ -318,6 +318,7 @@ def train(
 
                 static_input.copy_(inp)
                 static_label.copy_(tar)
+                optimizer.zero_grad(set_to_none=False)
                 graph.replay()
 
                 if world_rank == 0 and i == 1:
