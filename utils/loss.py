@@ -3,7 +3,6 @@ import torch
 from distributed.mappings import allreduce_forward_identity_backward
 
 
-@torch.jit.script
 def _squared_error_sum(
     pred: torch.Tensor, target: torch.Tensor
 ) -> torch.Tensor:
