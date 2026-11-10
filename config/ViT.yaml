@@ -67,7 +67,7 @@ short_opt_dali_dp:
 
 short_opt_big: &short_opt_big
   <<: *short_ls
-  global_batch_size: 16
+  global_batch_size: 4
   data_loader_config: 'dali'
   num_data_workers: 2
   amp_mode: bf16
@@ -75,6 +75,12 @@ short_opt_big: &short_opt_big
   enable_fused: true
   patch_size: 16
   embed_dim: 1024
+
+# lr = 5e-4 * sqrt(16 / 4) = 1e-3.
+short_opt_big_dp16:
+  <<: *short_opt_big
+  global_batch_size: 16
+  lr: 1.0E-3
 
 # no samples limits
 opt_big: &opt_big

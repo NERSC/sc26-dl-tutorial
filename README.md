@@ -320,7 +320,7 @@ DDP's buckets are the reason the all-reduces show up in the middle of the backwa
 
 ### Scaling the batch
 
-Hold the local batch fixed and let the global batch grow with the GPU count. A larger global batch is a less noisy gradient, so the usual companion is a larger learning rate. One rule of thumb is the square-root rule: multiply the single-GPU learning rate by `sqrt(global_batch_size / base_batch_size)`. The YAML does not apply that rule for you. `lr` in the block is the rate that runs. Copy the block and set another value.
+Hold the local batch fixed and let the global batch grow with the GPU count. A larger global batch is a less noisy gradient, so the usual companion is a larger learning rate. One rule of thumb is the square-root rule: multiply the single-GPU learning rate by `sqrt(global_batch_size / base_batch_size)`. The 4-GPU block leaves `lr` at `5e-4`. `short_opt_big_dp16` applies the rule to the large model.
 
 *If the learning rate stays at the single-GPU value while the global batch grows, what happens to the loss curve?*
 
@@ -328,25 +328,83 @@ Hold the local batch fixed and let the global batch grow with the GPU count. A l
 
 *As the GPU count grows, what happens to samples per second, and what happens to how fast the loss actually falls? Which scale finishes a fixed number of samples sooner, and which spends less GPU-time? Can you write a block that overfits, or one that diverges?*
 
-Each network's file will have a data-parallel block of this shape. In [`config/ViT.yaml`](config/ViT.yaml) that block is `short_opt_dali_dp`: the optimized ViT, global batch 16 on 4 GPUs, so the local batch stays 4.
+Each network's file will have a data-parallel block of this shape. In [`config/ViT.yaml`](config/ViT.yaml) that block is `short_opt_dali_dp`: the optimized ViT, global batch 16 on 4 GPUs, so the local batch stays 4. The learning rate is still the single-GPU value, `5e-4`.
 
 ```bash
-sbatch -N 1 ./submit_pm_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num=dp4
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_dp \
+sbatch -N 1 ./submit_pm_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num dp
 ```
 
-TensorBoard events for a `train.py` run land under `<expdir>/<config>/<N>GPU/<run_num>/logs/`. Switch the horizontal axis to relative time. Throughput shows up as how quickly a run moves across that axis. The loss and the RMSE show whether the larger batch is still training.
+The first epoch pays for `torch.compile`. Four GPUs and a global batch of 16 turn one epoch into four steps, so the same 80 iterations run for 20 epochs. Epochs 2 and 3 are the steady rate:
 
-> **TODO:** samples/sec and the validation curve against relative time, for each model's data-parallel config.
+```text
+2026-11-09 20:13:23,020 - root - INFO - Starting Training Loop...
+2026-11-09 20:13:48,225 - root - INFO -  Memory usage after forward pass: 23.2166748046875 GB.
+2026-11-09 20:13:55,286 - root - INFO - Time taken for epoch 1 is 12.101436 sec, avg 3.966471 samples/sec
+2026-11-09 20:13:55,291 - root - INFO -   Avg train loss=0.941822
+2026-11-09 20:13:55,301 - root - INFO -   Avg val loss=0.6188808679580688
+2026-11-09 20:13:55,306 - root - INFO -   Total validation time: 2.533473253250122 sec
+2026-11-09 20:13:56,345 - root - INFO -  Memory usage after forward pass: 24.2186279296875 GB.
+2026-11-09 20:14:02,919 - root - INFO - Time taken for epoch 2 is 4.220179 sec, avg 15.165235 samples/sec
+2026-11-09 20:14:02,924 - root - INFO -   Avg train loss=0.456384
+2026-11-09 20:14:02,935 - root - INFO -   Avg val loss=0.4121951758861542
+2026-11-09 20:14:02,940 - root - INFO -   Total validation time: 1.0587599277496338 sec
+2026-11-09 20:14:03,978 - root - INFO -  Memory usage after forward pass: 24.2186279296875 GB.
+2026-11-09 20:14:10,092 - root - INFO - Time taken for epoch 3 is 4.233808 sec, avg 15.116417 samples/sec
+2026-11-09 20:14:10,097 - root - INFO -   Avg train loss=0.329778
+2026-11-09 20:14:10,107 - root - INFO -   Avg val loss=0.3899458646774292
+2026-11-09 20:14:10,117 - root - INFO -   Total validation time: 0.6728227138519287 sec
+```
 
-Profile with the same `ENABLE_PROFILING=1` prefix. The report is captured on one rank unless you arrange otherwise. Find the gradient all-reduces and see whether they overlap compute in the backward.
+Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-> **TODO:** Nsight Systems timeline zoomed to the gradient synchronization.
+- GPU memory: 24.219 GB peak on each GPU. The local batch is still 4, so this is close to the 25.435 GB of the one-GPU DALI run.
+- Throughput: 15.11 samples/sec across 4 GPUs, up from 4.38 on one GPU.
+
+Profile every rank. The gradient all-reduces are NCCL kernels on their own stream, issued during the backward while the GEMMs are still running on the default stream. In this step the all-reduce takes about 2.4 ms inside an 873 ms step. This all-reduce is fully overlapped with the backward compute.
+
+![ViT data-parallel profile, NCCL gradient all-reduce during the backward](tutorial_images/vit_dp.png)
+
+### A larger model at local batch 1
+
+Typically, as model sizes or activation sizes grow, we can drop the local batch size to keep the step fit. In `short_opt_big`, the ViT grows to `patch_size: 16` and `embed_dim: 1024`. We can drop the local batch size to 1 and keep the step fit on 4 GPUs with a global batch of 4. This is a common pattern in training larger models. 
+
+```bash
+sbatch -N 1 ./submit_pm_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
+```
+
+At the last epoch the 4-GPU run is at 0.837 samples/sec.
+
+`short_opt_big_dp16` keeps that local batch of 1 and uses 16 GPUs, so the global batch is 16. We typically do this to train faster (and on larger datasets) The learning rate follows the square-root rule, from `5e-4` to `1e-3` to compensate for the larger global batch.
+
+```bash
+sbatch -N 4 ./submit_pm_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
+```
+
+We observe a throughput of 3.19 samples/sec and hence a larger throughout for data parallel scaling.
 
 ## Model parallelism
 
-Data parallelism stores a full copy of the model, and of the image, on every GPU. A wider network, or the same network on this 4096 × 4096 grid with smaller patches, raises both the activation memory and the weight memory. Past a point the step does not fit, and the model has to be sharded.
+Data parallelism still stores a full copy of the model and of the image on every GPU. At some point, as we grow the models, a local batch size of one also will not fit. `short_mp` is the next size up, `embed_dim: 1536` and `depth: 16`, with the same `patch_size: 16` and the same local batch of 1 (`global_batch_size: 4` on 4 GPUs). That step runs out of memory. Lowering the batch has nowhere left to go, so the replica itself has to be split. This is the typical way into model parallelism.
 
-The sharding here follows the Megatron pattern: column-parallel and row-parallel linear layers, plus a spatial split of the image. It is a blueprint for parallelizing a scientific model in PyTorch, not a fully tuned stack. [Megatron-LM](https://github.com/NVIDIA/Megatron-LM/tree/main/megatron/core) is the production version of the same ideas, including [context parallelism](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html) for a 1D token sequence. [`train_mp.py`](train_mp.py) builds the distributed module for the same four networks.
+```bash
+sbatch -N 1 ./submit_pm_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
+    --tp=1 --sp1=1 --sp2=1
+```
+
+The model is built before the step fails. The log reports a local parameter count of 555.545 M.
+
+```text
+2026-11-09 21:03:09,311 - root - INFO - Local parameter count: 555.545 M
+```
+
+The forward then fails in `F.linear` inside the pointwise linear:
+
+```text
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 768.00 MiB. GPU 1 has a total capacity of 39.49 GiB of which 760.00 MiB is free. Including non-PyTorch memory, this process has 38.74 GiB memory in use. Of the allocated memory 33.60 GiB is allocated by PyTorch, and 73.96 MiB is reserved by PyTorch but unallocated.
+```
+
+Hence, we need to shard the model. The sharding here follows the Megatron pattern: column-parallel and row-parallel linear layers, plus a spatial split of the image. It is a blueprint for parallelizing a scientific model in PyTorch, not a fully tuned stack. [Megatron-LM](https://github.com/NVIDIA/Megatron-LM/tree/main/megatron/core) is the production version of the same ideas, including [context parallelism](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html) for a 1D token sequence. [`train_mp.py`](train_mp.py) builds the distributed module for the same four networks.
 
 | Model | Distributed code | What is split |
 |---|---|---|
@@ -452,11 +510,48 @@ sbatch --nodes=<nodes> ./submit_pm_mp.sh \
     --tp=1 --sp1=4 --sp2=1
 ```
 
+For the ViT that ran out of memory, use 4 nodes. `sp1=4` shards the token sequence inside each node, and the global batch of 4 is split over `dp=4`, so the local batch stays 1.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp \
+sbatch -N 4 ./submit_pm_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
+    --tp=1 --sp1=4 --sp2=1
+```
+
+`sp1=4` brings the local parameter count to 480.048 M. The first three epochs stay under 40 GB. Epoch 4 is the profiled epoch.
+
+```text
+2026-11-09 21:13:17,782 - root - INFO - Starting Training Loop...
+2026-11-09 21:13:24,538 - root - INFO -  Memory usage after forward pass: 33.72662353515625 GB.
+2026-11-09 21:14:04,172 - root - INFO - Time taken for epoch 1 is 38.818769 sec, avg 1.545644 samples/sec
+2026-11-09 21:14:04,177 - root - INFO -   Avg train loss=0.606727
+2026-11-09 21:14:04,188 - root - INFO -   Avg val loss=0.3623535633087158
+2026-11-09 21:14:04,193 - root - INFO -   Total validation time: 1.284818410873413 sec
+2026-11-09 21:14:06,896 - root - INFO -  Memory usage after forward pass: 35.79498291015625 GB.
+2026-11-09 21:14:49,885 - root - INFO - Time taken for epoch 2 is 40.914987 sec, avg 1.564219 samples/sec
+2026-11-09 21:14:49,891 - root - INFO -   Avg train loss=0.304982
+2026-11-09 21:14:49,901 - root - INFO -   Avg val loss=0.3405551314353943
+2026-11-09 21:14:49,911 - root - INFO -   Total validation time: 1.9484591484069824 sec
+2026-11-09 21:14:52,629 - root - INFO -  Memory usage after forward pass: 36.04498291015625 GB.
+2026-11-09 21:15:35,487 - root - INFO - Time taken for epoch 3 is 41.071731 sec, avg 1.558249 samples/sec
+2026-11-09 21:15:35,492 - root - INFO -   Avg train loss=0.292403
+2026-11-09 21:15:35,502 - root - INFO -   Avg val loss=0.3354734778404236
+2026-11-09 21:15:35,507 - root - INFO -   Total validation time: 1.9264698028564453 sec
+```
+
+Recorded performance, leaving out the profiled epoch:
+
+- GPU memory: 36.045 GB peak after the forward pass.
+- Throughput: 1.56 samples/sec across 16 GPUs, with local batch 1.
+
+Attention keeps the query on this rank's tokens and all-gathers the keys and values over `sp1-sp2` before the score. In the profile that gather is `ncclDevKernel_AllGather` on the default stream, about 874 µs, between the BF16 GEMMs of the forward.
+
+![ViT spatial profile, NCCL all-gather of keys and values in the forward](tutorial_images/vit_mp.png)
+
 Each YAML file will have a spatial-parallel block. `--order=sp1-tp-sp2-dp` keeps the spatial ranks adjacent when that axis is the wide one. Logs go to `<expdir>/<config>/<M>MP/<run_num>/`, with `M = tp × sp1 × sp2`.
 
 A few sizes have to divide evenly. Swin's `window_size` has to divide the patch grid on each spatial rank. The FNO's channel count has to be at least `sp1` and at least `sp2`. Transformer Engine wants an even local sequence, and [`networks/vit_te.py`](networks/vit_te.py) pads when `model_backend: transformer-engine` and the split is uneven. With ConvNeXt local reads, keep `sp2=1` so each rank reads whole rows.
 
-> **TODO:** memory after the forward pass, and samples/sec, for a spatial mesh and a tensor-parallel mesh.
 
 > **TODO:** Nsight Systems timeline zoomed to the activation collectives in forward and backward.
 
@@ -464,8 +559,7 @@ A few sizes have to divide evenly. Swin's `window_size` has to divide the patch 
 
 Picking `dp`, `tp`, and `sp1`/`sp2`, and which of them sits on the fast links inside a node, depends on how much each collective moves and on the machine. The usual tool for that choice is a performance model. [Performance models for transformers in science](https://arxiv.org/abs/2410.00273) works through one.
 
-### CUDA graphs
+### CUDA graphs (optional)
 
 [`train_mp_graphs.py`](train_mp_graphs.py) captures the training step in a CUDA graph and replays it. A graph removes the CPU launch gap between kernels. That gap matters when a step is many small launches, and when several communicators have to stay in lockstep: the CPU jitter shows up as ranks waiting on each other. [`submit_pm_mp.sh`](submit_pm_mp.sh) calls [`train_mp.py`](train_mp.py). Compare the two scripts for where the graph is captured and where it is replayed.
 
-> **TODO:** timeline comparing `train_mp.py` and `train_mp_graphs.py` on the same mesh.
