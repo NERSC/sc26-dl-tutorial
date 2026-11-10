@@ -17,6 +17,7 @@ mkdir -p ${LOGDIR}
 args=("$@")
 
 export HDF5_USE_FILE_LOCKING=FALSE
+export OMP_NUM_THREADS=1
 
 # Profiling
 if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
@@ -37,5 +38,6 @@ srun -u shifter -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
     bash -c '
     source export_DDP_vars.sh
     unset NCCL_NET_PLUGIN
+    export OMP_NUM_THREADS=1
     '"${PROFILE_CMD}"' python train_mp.py "$@"
     ' bash "${args[@]}"
