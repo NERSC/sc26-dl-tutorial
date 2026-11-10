@@ -61,6 +61,8 @@ class HaloDepthwiseConv2d(nn.Conv2d):
 
 
 class DistributedConvNeXt(ConvNeXtField):
+    """ConvNeXtField whose depthwise convolutions exchange spatial halos."""
+
     def __init__(self, *, spatial_shard, **kwargs):
         if comm.get_size("tp") != 1:
             raise ValueError("ConvNeXt supports spatial parallelism only; use tp=1")
@@ -81,4 +83,5 @@ class DistributedConvNeXt(ConvNeXtField):
 
 
 def ConvNeXt(params, spatial_shard):
+    """Build a spatially sharded ConvNeXt from a parameter object."""
     return DistributedConvNeXt(spatial_shard=spatial_shard, **model_kwargs(params))

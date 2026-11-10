@@ -1,11 +1,11 @@
+"""Rank groups for data, tensor, and two-dimensional spatial parallelism.
+
+The grouping follows the orthogonal-rank construction used by Megatron-LM.
+"""
+
 import torch
 import numpy as np
 from typing import Callable, List, Optional
-
-"""
-Utility to generate hyperrectangle of process groups for any general model parallelism
-Taken from MegatronLM: https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/core/parallel_state.py
-"""
 
 
 def generate_masked_orthogonal_rank_groups(
@@ -74,15 +74,7 @@ def generate_masked_orthogonal_rank_groups(
         return sum([x * y for x, y in zip(a, b)])
 
     def decompose(index, shape, stride=None):
-        """
-        This function solve the math problem below:
-            There is an equation:
-                index = sum(idx[i] * stride[i])
-            And given the value of index, stride.
-            Return the idx.
-        This function is used to get the coordinates for each parallel dimension
-        from group_index and rank_in_group.
-        """
+        """Recover per-dimension coordinates from a flattened group index."""
         if stride is None:
             stride = prefix_product(shape)
         idx = [(index // d) % s for s, d in zip(shape, stride)]

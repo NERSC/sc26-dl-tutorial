@@ -1,7 +1,10 @@
+"""Small field plots written during training."""
+
 import matplotlib.pyplot as plt
 
 
 def generate_images(fields):
+    """Return a figure comparing one target channel with the prediction."""
     _, tar, gen = [x.detach().float().cpu().numpy() for x in fields]
     fig, ax = plt.subplots(1, 2, figsize=(12, 6))
     plt.title("Field 0")

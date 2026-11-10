@@ -1,3 +1,5 @@
+"""Shared mesh setup and parameter comparisons for the distributed tests."""
+
 import torch
 import os
 import datetime as dt
@@ -151,7 +153,7 @@ def assert_reference_gradients(
     return relative_error, maximum_absolute_error
 
 def copy_mlp_weights(mlp_layer, mlp_layer_distributed):
-    """copy the weights of mlp into the correct shard of mlp_dist"""
+    """Copy an MLP's weights into this rank's tensor-parallel shard."""
     tp = comm.get_size("tp")
     rank_tp = comm.get_rank("tp")  # which tp rank
     embed_local = mlp_layer.fc1.weight.shape[0] // tp

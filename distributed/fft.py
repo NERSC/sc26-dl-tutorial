@@ -1,3 +1,5 @@
+"""Pencil-decomposed real FFTs for spatially sharded channels-first fields."""
+
 from typing import Optional
 
 import torch

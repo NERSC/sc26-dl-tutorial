@@ -1,3 +1,5 @@
+"""Checks for spatial split sizes, ViT and Swin tile rules, and loader tiles."""
+
 from types import SimpleNamespace
 
 import h5py

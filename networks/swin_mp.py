@@ -1,3 +1,5 @@
+"""Swin transformer with tensor-parallel channels and spatially sharded windows."""
+
 from functools import partial
 
 import torch
@@ -52,6 +54,8 @@ def make_local_shifted_window_mask(
 
 
 class WindowAttention(nn.Module):
+    """Window attention with heads split across the tensor-parallel group."""
+
     def __init__(
         self,
         dim,
@@ -122,6 +126,8 @@ class WindowAttention(nn.Module):
 
 
 class Block(nn.Module):
+    """Shifted-window block whose roll crosses spatial ranks."""
+
     def __init__(
         self,
         dim,
@@ -202,6 +208,8 @@ class Block(nn.Module):
 
 
 class PatchEmbed(nn.Module):
+    """Embed one spatial rank's tile as a grid of patch tokens."""
+
     def __init__(
         self,
         img_size=(224, 224),
@@ -238,6 +246,8 @@ class PatchEmbed(nn.Module):
 
 
 class DistributedSwinTransformer(nn.Module):
+    """Swin transformer sharded over tensor and spatial parallel groups."""
+
     def __init__(
         self,
         img_size=(224, 224),
@@ -352,6 +362,7 @@ class DistributedSwinTransformer(nn.Module):
                 nn.init.ones_(module.weight)
 
     def forward_head(self, x):
+        """Fold this rank's patch grid back into its NCHW tile."""
         batch, height, width, _ = x.shape
         x = self.head(x).reshape(
             batch,
@@ -377,6 +388,7 @@ class DistributedSwinTransformer(nn.Module):
 
 
 def Swin(params, spatial_shard, **kwargs):
+    """Build a distributed Swin transformer from a parameter object."""
     return DistributedSwinTransformer(
         img_size=tuple(params.img_size),
         in_chans=params.n_in_channels,

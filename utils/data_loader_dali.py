@@ -1,3 +1,5 @@
+"""DALI pipeline for the synthetic trajectory files."""
+
 import h5py
 import numpy as np
 import torch
@@ -12,6 +14,7 @@ import utils.dali_es_helper as esh
 def get_data_loader(
     params, data_path, distributed, train, spatial_shard=None
 ):
+    """Return the DALI loader, matching the PyTorch loader's return length."""
     dataloader = SynDaliDataLoader(
         params, data_path, train, spatial_shard=spatial_shard
     )
@@ -23,7 +26,10 @@ def get_data_loader(
 
 
 class SynDaliDataLoader:
+    """DALI iterator over input and target tiles from the external source."""
+
     def get_pipeline(self):
+        """Build the external-source pipeline for this rank's tile."""
         pipeline = Pipeline(
             batch_size=self.batch_size,
             num_threads=2,

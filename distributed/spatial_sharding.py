@@ -1,3 +1,5 @@
+"""Spatial tiles for ViT, Swin, ConvNeXt, and patch-free grids such as the FNO."""
+
 from dataclasses import dataclass
 from numbers import Integral
 from typing import Sequence, Tuple
@@ -7,6 +9,8 @@ from distributed.helpers import compute_split_shapes
 
 @dataclass(frozen=True)
 class MeshSpatialShard:
+    """One rank's height and width tile on a two-dimensional spatial mesh."""
+
     global_shape: Tuple[int, int]
     h_splits: Tuple[int, ...]
     w_splits: Tuple[int, ...]
@@ -16,22 +20,26 @@ class MeshSpatialShard:
 
     @property
     def h_bounds(self) -> Tuple[int, int]:
+        """Return the inclusive-exclusive height range of this rank's tile."""
         start = sum(self.h_splits[: self.h_rank])
         return start, start + self.h_splits[self.h_rank]
 
     @property
     def w_bounds(self) -> Tuple[int, int]:
+        """Return the inclusive-exclusive width range of this rank's tile."""
         start = sum(self.w_splits[: self.w_rank])
         return start, start + self.w_splits[self.w_rank]
 
     @property
     def core_slices(self) -> Tuple[slice, slice]:
+        """Return this rank's height and width slices into the full field."""
         h_start, h_end = self.h_bounds
         w_start, w_end = self.w_bounds
         return slice(h_start, h_end), slice(w_start, w_end)
 
     @property
     def local_shape(self) -> Tuple[int, int]:
+        """Return the height and width of this rank's tile."""
         return self.h_splits[self.h_rank], self.w_splits[self.w_rank]
 
 

@@ -1,3 +1,5 @@
+"""Model-parallel vision transformer with tensor and spatial parallelism."""
+
 from functools import partial
 
 import torch
@@ -134,6 +136,8 @@ class RowParallelLinear(nn.Module):
 
 
 class MLP(nn.Module):
+    """Tensor-parallel MLP for channel-last tokens or channel-first fields."""
+
     def __init__(
         self,
         in_features,
@@ -162,6 +166,8 @@ class MLP(nn.Module):
 
 
 class Attention(nn.Module):
+    """Self-attention with heads split across the tensor-parallel group."""
+
     def __init__(
         self,
         dim,
@@ -223,6 +229,8 @@ class Attention(nn.Module):
 
 
 class LayerNorm(nn.LayerNorm):
+    """LayerNorm whose affine parameters are replicated across model-parallel ranks."""
+
     def __init__(self, normalized_shape, **kwargs):
         super().__init__(normalized_shape, **kwargs)
         if self.elementwise_affine:
@@ -240,6 +248,8 @@ class LayerNorm(nn.LayerNorm):
 
 
 class Block(nn.Module):
+    """Pre-norm attention and MLP block using the parallel linear layers."""
+
     def __init__(
         self,
         dim,
@@ -280,6 +290,8 @@ class Block(nn.Module):
 
 
 class PatchEmbed(nn.Module):
+    """Patch embedding for one spatial rank's tile of the field."""
+
     def __init__(
         self,
         img_size=(224, 224),
@@ -315,6 +327,8 @@ class PatchEmbed(nn.Module):
 
 
 class VisionTransformer(nn.Module):
+    """Vision transformer sharded over tensor and spatial parallel groups."""
+
     def __init__(
         self,
         img_size=(224, 224),
@@ -405,11 +419,13 @@ class VisionTransformer(nn.Module):
                 nn.init.ones_(module.weight)
 
     def prepare_tokens(self, x):
+        """Embed this rank's tile and add its slice of the positional encoding."""
         x = self.patch_embed(x)
         x = self.pos_drop(x + self.pos_embed)
         return x.flatten(1, 2)
 
     def forward_head(self, x):
+        """Project this rank's tokens back to its NCHW tile."""
         batch = x.shape[0]
         x = x.reshape(
             batch,
@@ -445,6 +461,7 @@ class VisionTransformer(nn.Module):
 
 
 def ViT(params, spatial_shard, **kwargs):
+    """Build a model-parallel VisionTransformer from a parameter object."""
     return VisionTransformer(
         img_size=tuple(params.img_size),
         in_chans=params.n_in_channels,

@@ -1,1 +1,1 @@
-# model parallelism helpers and routines
+"""Collectives, spatial sharding, and distributed FFT helpers."""

@@ -1,3 +1,5 @@
+"""Vision transformer built on Transformer Engine linear and attention layers."""
+
 import torch.nn.functional as F
 import torch
 import torch.nn as nn
@@ -11,6 +13,8 @@ import transformer_engine.pytorch as te
 
 
 class MLP(nn.Module):
+    """Tensor-parallel MLP using Transformer Engine linear layers."""
+
     def __init__(
         self,
         in_features,
@@ -83,6 +87,8 @@ class MLP(nn.Module):
 
 
 class Attention(nn.Module):
+    """Transformer Engine attention over locally padded token sequences."""
+
     def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0):
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -232,6 +238,7 @@ class Attention(nn.Module):
         return x
 
 class LayerNorm(nn.Module):
+    """LayerNorm whose affine parameters are replicated across model-parallel ranks."""
     def __init__(
         self,
         normalized_shape,
@@ -273,6 +280,7 @@ class LayerNorm(nn.Module):
 
 
 class Block(nn.Module):
+    """Pre-norm Transformer Engine attention and MLP block."""
     def __init__(
         self,
         dim,
@@ -317,7 +325,7 @@ class Block(nn.Module):
 
 
 class PatchEmbed(nn.Module):
-    """Image to Patch Embedding"""
+    """Embed one spatial rank's tile as a grid of patch tokens."""
 
     def __init__(self, img_size=[224, 224], patch_size=16, in_chans=3, embed_dim=768):
         super().__init__()
@@ -348,6 +356,8 @@ class PatchEmbed(nn.Module):
 
 
 class VisionTransformer(nn.Module):
+    """Transformer Engine ViT sharded over tensor and spatial groups."""
+
     def __init__(
         self,
         img_size=[224, 224],
@@ -453,11 +463,13 @@ class VisionTransformer(nn.Module):
                 nn.init.constant_(m.weight, 1.0)
 
     def prepare_tokens(self, x):
+        """Embed this rank's tile and add its slice of the positional encoding."""
         x = self.patch_embed(x)  # patch linear embedding
         x = x + self.pos_embed
         return self.pos_drop(x).flatten(1, 2)
 
     def forward_head(self, x):
+        """Project this rank's tokens back to its NCHW tile."""
         B, _, _ = x.shape  # B x N x embed_dim
         x = x.reshape(B, self.patch_embed.h, self.patch_embed.w, self.embed_dim)
         B, h, w, _ = x.shape
@@ -491,6 +503,7 @@ class VisionTransformer(nn.Module):
 
 
 def ViT(params, spatial_shard, **kwargs):
+    """Build a Transformer Engine ViT from a parameter object."""
     model = VisionTransformer(
         img_size=params.img_size,
         in_chans=params.n_in_channels,

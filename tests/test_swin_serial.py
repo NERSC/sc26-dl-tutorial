@@ -1,3 +1,5 @@
+"""Serial checks for Swin window partition, the shift mask, and partial windows."""
+
 import pytest
 import torch
 
