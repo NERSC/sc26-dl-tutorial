@@ -61,7 +61,7 @@ Jobs write a profile on the compute node. Install [Nsight Systems](https://devel
 
 ### Data
 
-The inputs are an example turbulence simulation: HDF5 trajectories of 4096 × 4096 fields with 2 channels. [`utils/data_loader.py`](utils/data_loader.py) serves them.
+The data set is comprised of 64 independent trajectories of decaying 2D homogeneous isotropic turbulence. Each trajectory is simulated on a periodic 4096×4096 grid with no forcing and saved as 64 frames, 0.04 time units apart, from t=0 to 2.52. The simulations are initialized using a San-Staples style initialization (https://www.sciencedirect.com/science/article/pii/S0045793012001363)  with `kp = 32` and a randomized phase for each Fourier mode.  Each trajectory is one HDF5 file holding a float32 fields array of shape [64, 2, 4096, 4096] (time, u/v channels, y, x), cell-centered. This data is meant to be a simple example of high resolution data for the purpose of this tutorial. In practices, data sets can be much larger (many more snapshots and / or trajectories) and / or more complex (e.g. 3D, multiphysics, many more variables, etc.) [`utils/data_loader.py`](utils/data_loader.py) serves them to the training process.
 
 * **Input and target.** A sample is two snapshots `dt` steps apart. The network sees the first and predicts the second.
 * **Normalization.** Channel mean and standard deviation come from `stats_trajectory.h5`. Files are split 90 / 10 into training and validation.
