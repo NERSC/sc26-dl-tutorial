@@ -12,18 +12,18 @@
 #SBATCH -o %x-%j.out
 
 # host paths, mounted as /data and /logs in the container; override from the environment, e.g.
-#   LOGDIR=$PSCRATCH/my_logs sbatch ./submit_pm.sh ...
+#   sbatch -N 4 ./submit_pm_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --tp=1 --sp1=4 --sp2=1
 DATADIR=${DATADIR:-/pscratch/sd/s/shas1693/data/sc26_tutorial_data}
-LOGDIR=${LOGDIR:-${SCRATCH}/sc25-dl-tutorial/logs}
+LOGDIR=${LOGDIR:-${SCRATCH}/sc26-dl-tutorial/logs}
 mkdir -p ${LOGDIR}
-args="${@}"
+args=("$@")
 
 export HDF5_USE_FILE_LOCKING=FALSE
 
 # Profiling
 if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     echo "Enabling profiling..."
-    NSYS_ARGS="--trace=cuda,cublas,nvtx --cuda-graph-trace=node --kill none -c cudaProfilerApi -f true --trace-fork-before-exec=true"
+    NSYS_ARGS="--trace=cuda,cublas,nvtx --cuda-graph-trace=node --kill none -c cudaProfilerApi --capture-range-end=stop -f true --trace-fork-before-exec=true"
     NSYS_OUTPUT=${LOGDIR}/${PROFILE_OUTPUT:-"profile"}.%q{SLURM_PROCID}
     export PROFILE_CMD="nsys profile $NSYS_ARGS -o $NSYS_OUTPUT"
 fi
@@ -37,8 +37,8 @@ export CUDA_VISIBLE_DEVICES=3,2,1,0
 set -x
 srun -u shifter -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
     --env PYTHONUSERBASE=${LOGDIR} \
-    bash -c "
+    bash -c '
     source export_DDP_vars.sh
     unset NCCL_NET_PLUGIN
-    ${PROFILE_CMD} python train_mp.py ${args}
-    "
+    '"${PROFILE_CMD}"' python train_mp.py "$@"
+    ' bash "${args[@]}"
