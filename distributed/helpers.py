@@ -1,3 +1,5 @@
+"""Tensor split, gather, and halo helpers used by the distributed autograd mappings."""
+
 import torch
 import torch.distributed as dist
 from utils import comm
@@ -80,7 +82,7 @@ def _reduce(input_, comm_name):
 
 
 def split_tensor_along_dim(tensor, dim, num_chunks, sections=None):
-    """Helper routine to split a tensor along a given dimension"""
+    """Split a tensor into ``num_chunks`` along ``dim``."""
     if dim < 0:
         dim += tensor.dim()
     if dim < 0 or dim >= tensor.dim():
@@ -121,7 +123,7 @@ def _split(input_, dim_, comm_name, sections=None):
 
 def _gather(input_, dim_, shapes_, comm_name):
     """
-    Gather tensors and concatinate along the dimension dim_.
+    Gather tensors and concatenate them along ``dim_``.
     """
     comm_size = comm.get_size(comm_name)
     if (shapes_ is not None) and (len(shapes_) != comm_size):

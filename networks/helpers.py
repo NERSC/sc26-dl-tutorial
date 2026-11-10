@@ -1,3 +1,5 @@
+"""Truncated-normal initialization and shared Fourier-mode helpers."""
+
 import math
 import torch.nn.functional as F
 import torch

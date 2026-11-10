@@ -1,3 +1,5 @@
+"""Single-process or data-parallel training."""
+
 import os
 import time
 import numpy as np
@@ -22,6 +24,7 @@ from networks import convnext, fno, swin, vit
 
 
 def build_model(params):
+    """Build the serial network named by the parameters."""
     network = params.get("network", params.get("model", "vit")).lower()
     if network == "vit":
         return vit.ViT(params)
@@ -35,6 +38,7 @@ def build_model(params):
 
 
 def train(params, writer, local_rank, world_rank, world_size):
+    """Train one serial or data-parallel model for the configured number of iterations."""
     # set device and benchmark mode
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)

@@ -1,3 +1,5 @@
+"""Spatially sharded Fourier neural operator."""
+
 import math
 from typing import Optional
 
@@ -266,6 +268,7 @@ class FourierNeuralOperator(nn.Module):
 
 
 def FNO(params, **kwargs):
+    """Build a distributed FourierNeuralOperator from a parameter object."""
     return FourierNeuralOperator(
         img_size=tuple(params.img_size),
         in_chans=params.n_in_channels,

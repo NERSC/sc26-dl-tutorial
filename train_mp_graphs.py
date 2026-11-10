@@ -1,3 +1,5 @@
+"""Model-parallel training with the forward and backward passes captured in a CUDA graph."""
+
 import os
 import time
 import gc
@@ -37,6 +39,7 @@ from utils.plots import generate_images
 
 
 def build_model(params, spatial_shard):
+    """Build the distributed network named by the parameters."""
     network = params.get("network", params.get("model", "vit")).lower()
     if network == "fno":
         return fno_mp.FNO(params)
@@ -61,6 +64,7 @@ def capture_model(
     spatial_shard,
     num_warmup=20,
 ):
+    """Warm up the model, then capture forward and backward in a CUDA graph."""
     logging.info("Capturing Model")
     local_height, local_width = spatial_shard.local_shape
     inp_shape = (
@@ -127,6 +131,7 @@ def train(
     world_rank,
     spatial_shard,
 ):
+    """Train one model-parallel replica by replaying a captured CUDA graph."""
     # set device and benchmark mode
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)

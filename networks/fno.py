@@ -1,3 +1,5 @@
+"""Serial Fourier neural operator and its spectral resampling layers."""
+
 import math
 from typing import Optional
 
@@ -36,9 +38,8 @@ class FourierNeuralOperatorLayer(nn.Module):
     Fourier neural operator layer: 2D real FFT, a complex channel-mixing weight per
     retained wavenumber (kh, kw), and the inverse FFT.
 
-    Input and output are (B, channels, H, W) fields on the same grid. The FNO runs channels-first,
-    so the FFTs act on the contiguous trailing dims. The pointwise layers are the ViT's MLP layers
-    in their ``layout="channels_first"`` mode, see distributed/fft.py for the reasoning.
+    Input and output are (B, channels, H, W) fields on the same grid. The layer runs
+    channels-first, so the FFTs act on the contiguous trailing dimensions.
 
     ``modes_kh`` and ``modes_kw`` set the number of retained wavenumbers after truncation
     (defaults: all), and the weight has shape (in_channels, out_channels, modes_kh, modes_kw).
@@ -186,7 +187,7 @@ class Block(nn.Module):
 class FourierNeuralOperator(nn.Module):
     """
     Fourier neural operator: a pointwise lifting MLP, ``depth`` FNO blocks, and a pointwise projection MLP to
-    ``out_chans``. Input and output are (B, C, H, W); all layers are channels-first, see distributed/fft.py.
+    ``out_chans``. Input and output are (B, C, H, W), and every layer is channels-first.
 
     By default the blocks run on the full grid with ``embed_dim`` channels. With ``downsample = f > 1`` they run on a
     latent grid ``f`` times coarser per axis, which divides the activation memory of the blocks by ``f^2``:
@@ -264,6 +265,7 @@ class FourierNeuralOperator(nn.Module):
 
 
 def FNO(params, **kwargs):
+    """Build a serial FourierNeuralOperator from a parameter object."""
     return FourierNeuralOperator(
         img_size=tuple(params.img_size),
         in_chans=params.n_in_channels,

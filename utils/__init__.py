@@ -1,7 +1,10 @@
+"""Training helpers shared by the serial and model-parallel entry points."""
+
 import torch
 
 
 def profiled_batches(loader, split):
+    """Yield batches from ``loader``, marking iterator and fetch ranges for NVTX."""
     with torch.cuda.nvtx.range(f"data/{split}/iterator"):
         iterator = iter(loader)
     while True:
@@ -16,6 +19,7 @@ def profiled_batches(loader, split):
 def get_data_loader_distributed(
     params, location, distributed, train, spatial_shard=None
 ):
+    """Build the PyTorch or DALI loader selected by ``data_loader_config``."""
     if params.data_loader_config.startswith("dali"):
         from .data_loader_dali import get_data_loader
     else:

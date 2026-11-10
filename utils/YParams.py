@@ -1,9 +1,11 @@
+"""YAML configuration object with one shared parameter dictionary."""
+
 from ruamel.yaml import YAML
 import logging
 
 
 class YParams:
-    """Yaml file parser"""
+    """Load one named config so attributes and items read the same dictionary."""
 
     def __init__(self, yaml_filename, config_name, print_params=False):
         object.__setattr__(self, "_yaml_filename", yaml_filename)
@@ -39,10 +41,11 @@ class YParams:
         self.params[key] = val
 
     def get(self, key, default=None):
-        """Get a parameter value"""
+        """Return a parameter, or ``default`` when it is absent."""
         return self.params.get(key, default)
 
     def log(self):
+        """Log the loaded configuration."""
         logging.info("------------------ Configuration ------------------")
         logging.info("Configuration file: " + str(self._yaml_filename))
         logging.info("Configuration name: " + str(self._config_name))
@@ -51,4 +54,5 @@ class YParams:
         logging.info("---------------------------------------------------")
 
     def update(self, new_params):
+        """Merge ``new_params`` into the parameter dictionary."""
         self.params.update(new_params)

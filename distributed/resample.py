@@ -1,3 +1,5 @@
+"""Spatially sharded Fourier resampling for the distributed FNO."""
+
 import torch
 from torch import nn
 

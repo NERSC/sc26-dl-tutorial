@@ -1,3 +1,5 @@
+"""Autograd mappings that pair a forward collective with its backward collective."""
+
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
@@ -224,16 +226,19 @@ class _HaloForwardSumBackward(torch.autograd.Function):
 
 @torch.compiler.disable
 def identity_forward_allreduce_backward(input_, comm_name):
+    """Pass the forward value through and all-reduce the gradient."""
     return _IdentityForwardAllReduceBackward.apply(input_, comm_name)
 
 
 @torch.compiler.disable
 def allreduce_forward_identity_backward(input_, comm_name):
+    """All-reduce the forward value and pass the gradient through."""
     return _AllReduceForwardIdentityBackward.apply(input_, comm_name)
 
 
 @torch.compiler.disable
 def allgather_forward_split_backward(input_, dim, shapes, comm_name):
+    """All-gather along ``dim`` and split the gradient back across the group."""
     return _AllGatherForwardSplitBackward.apply(
         input_, dim, shapes, comm_name
     )
@@ -243,6 +248,7 @@ def allgather_forward_split_backward(input_, dim, shapes, comm_name):
 def split_forward_allgather_backward(
     input_, dim, shapes=None, comm_name=None
 ):
+    """Keep this rank's slice and all-gather the gradient."""
     if comm_name is None:
         raise ValueError("comm_name is required")
     return _SplitForwardAllGatherBackward.apply(
@@ -254,6 +260,7 @@ def split_forward_allgather_backward(
 def reducescatter_forward_allgather_backward(
     input_, dim, shapes, comm_name
 ):
+    """Reduce-scatter the forward value and all-gather the gradient."""
     return _ReduceScatterForwardAllGatherBackward.apply(
         input_, dim, shapes, comm_name
     )
@@ -263,6 +270,7 @@ def reducescatter_forward_allgather_backward(
 def allgather_forward_reducescatter_backward(
     input_, dim, shapes, comm_name
 ):
+    """All-gather the forward value and reduce-scatter the gradient."""
     return _AllGatherForwardReduceScatterBackward.apply(
         input_, dim, shapes, comm_name
     )
@@ -283,6 +291,7 @@ def distributed_transpose(input_, dims, shapes, comm_name):
 def roll_forward_reverseroll_backward(
     input_, shifts, dims, comm_names
 ):
+    """Roll sharded axes forward and roll the gradient back."""
     return _RollForwardReverseRollBackward.apply(
         input_, tuple(shifts), tuple(dims), tuple(comm_names)
     )

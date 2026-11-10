@@ -85,6 +85,7 @@ def decode_case(model_name, case):
 
 
 def expand_cases(model_name):
+    """Turn each model's case row into the arguments the test method receives."""
     return [decode_case(model_name, case) for case in CASES[model_name]]
 
 
@@ -165,6 +166,7 @@ def build_models(model_name, height, width, spec):
 
 
 def gather_field(tensor, shard):
+    """Gather a spatially sharded field back to the full batch and grid."""
     tensor = allgather_forward_split_backward(
         tensor, -1, shard.w_splits, "sp2"
     )

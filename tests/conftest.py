@@ -1,3 +1,5 @@
+"""Pytest hooks for multi-process test launches."""
+
 import os
 
 import pytest

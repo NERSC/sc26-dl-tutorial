@@ -1,3 +1,5 @@
+"""Serial checks for the FNO spectral layer against an independent torch.fft path."""
+
 import unittest
 
 import torch
@@ -32,6 +34,8 @@ def reference(layer, x):
 
 
 class TestFNOSerial(unittest.TestCase):
+    """Identity weight, one torch.fft reference, and ignored self-conjugate bins."""
+
     def setUp(self):
         torch.manual_seed(333)
 

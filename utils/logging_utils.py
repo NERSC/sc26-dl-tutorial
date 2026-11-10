@@ -1,3 +1,5 @@
+"""Rank-filtered logging for Slurm jobs."""
+
 import os
 import logging
 
@@ -5,10 +7,12 @@ _format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
 def slurm_filter(record):
+    """Keep log records only on Slurm process zero."""
     return int(os.environ["SLURM_PROCID"]) == 0
 
 
 def config_logger(log_level=logging.INFO):
+    """Configure the root logger and keep output on Slurm process zero."""
     logging.basicConfig(format=_format, level=log_level)
     root_logger = logging.getLogger()
     root_logger.addFilter(slurm_filter)
@@ -17,6 +21,7 @@ def config_logger(log_level=logging.INFO):
 def log_to_file(
     logger_name=None, log_level=logging.INFO, log_filename="tensorflow.log"
 ):
+    """Attach a file handler to the named logger, or to the root logger."""
 
     if not os.path.exists(os.path.dirname(log_filename)):
         os.makedirs(os.path.dirname(log_filename))
@@ -33,6 +38,7 @@ def log_to_file(
 
 
 def log_versions():
+    """Log the PyTorch build and selected library versions."""
     import torch
     import subprocess
 

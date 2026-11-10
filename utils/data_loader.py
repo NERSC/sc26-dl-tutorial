@@ -1,3 +1,5 @@
+"""PyTorch dataset and loader for the synthetic trajectory files."""
+
 import glob
 import logging
 import os
@@ -10,6 +12,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 def worker_init(_worker_id):
+    """Seed a DataLoader worker from the seed PyTorch assigned to it."""
     with torch.cuda.nvtx.range("data/worker_init"):
         np.random.seed(torch.utils.data.get_worker_info().seed % (2**32 - 1))
 
@@ -17,6 +20,7 @@ def worker_init(_worker_id):
 def get_data_loader(
     params, data_path, distributed, train, spatial_shard=None
 ):
+    """Return the training or validation loader, dataset, and optional sampler."""
     dataset = SynDataset(
         params, data_path, train, spatial_shard=spatial_shard
     )
@@ -48,6 +52,8 @@ def get_data_loader(
 
 
 class SynDataset(Dataset):
+    """Input and target fields from the synthetic HDF5 trajectories."""
+
     def __init__(self, params, data_path, train, spatial_shard=None):
         self.nvtx_prefix = "data/train" if train else "data/valid"
         self.step = int(params.dt)

@@ -11,12 +11,14 @@ from networks.vit import MLP
 
 
 def positive_int(value, name):
+    """Return ``value`` when it is a positive integer."""
     if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
     return int(value)
 
 
 def kernel_radius(kernel_size):
+    """Return the halo width of an odd convolution kernel."""
     kernel_size = positive_int(kernel_size, "kernel_size")
     if kernel_size % 2 == 0:
         raise ValueError("kernel_size must be odd")
@@ -24,6 +26,7 @@ def kernel_radius(kernel_size):
 
 
 def image_shape(img_size, patch_size):
+    """Return a height and width that are divisible by ``patch_size``."""
     if not isinstance(img_size, (tuple, list)) or len(img_size) != 2:
         raise ValueError("img_size must be a (height, width) pair")
     shape = tuple(positive_int(v, "img_size") for v in img_size)
@@ -44,6 +47,8 @@ class LayerNorm2d(nn.Module):
 
 
 class ConvNeXtBlock(nn.Module):
+    """Depthwise convolution and channel MLP with a residual connection."""
+
     def __init__(self, channels, kernel_size=7, layer_scale_init=1e-6):
         super().__init__()
         self.depthwise = nn.Conv2d(
@@ -63,6 +68,8 @@ class ConvNeXtBlock(nn.Module):
 
 
 class ConvNeXtField(nn.Module):
+    """Constant-resolution ConvNeXt mapping an NCHW field to an NCHW field."""
+
     def __init__(
         self,
         img_size,
@@ -106,6 +113,7 @@ class ConvNeXtField(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward_head(self, x):
+        """Fold patch tokens back into an NCHW field."""
         batch, height, width, _ = x.shape
         x = self.head(x).reshape(
             batch, height, width, self.patch_size, self.patch_size, self.out_ch,
@@ -126,6 +134,7 @@ class ConvNeXtField(nn.Module):
 
 
 def model_kwargs(params):
+    """Read ConvNeXt constructor arguments from a parameter object."""
     return dict(
         img_size=tuple(params.img_size),
         in_chans=params.n_in_channels,
@@ -139,4 +148,5 @@ def model_kwargs(params):
 
 
 def ConvNeXt(params):
+    """Build a ConvNeXtField from a parameter object."""
     return ConvNeXtField(**model_kwargs(params))

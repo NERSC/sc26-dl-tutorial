@@ -1,3 +1,5 @@
+"""Serial Swin transformer for NCHW fields."""
+
 from functools import partial
 
 import torch
@@ -32,7 +34,7 @@ def window_partition(x, window_size):
 
 
 def window_reverse(windows, window_size, feature_size):
-    """Reverse :func:`window_partition` into a BHWC tensor."""
+    """Reverse ``window_partition`` into a BHWC tensor."""
     height, width = feature_size
     window_h, window_w = window_size
     windows_per_image = (height // window_h) * (width // window_w)
@@ -82,6 +84,8 @@ def make_shifted_window_mask(feature_size, window_size, shift_size):
 
 
 class MLP(nn.Module):
+    """Two-layer channel MLP with GELU and dropout."""
+
     def __init__(
         self,
         in_features,
@@ -107,6 +111,7 @@ class MLP(nn.Module):
 
 
 class WindowAttention(nn.Module):
+    """Multi-head attention inside one Swin window."""
     def __init__(
         self,
         dim,
@@ -165,6 +170,8 @@ class WindowAttention(nn.Module):
 
 
 class Block(nn.Module):
+    """Shifted-window attention and MLP block."""
+
     def __init__(
         self,
         dim,
@@ -234,6 +241,8 @@ class Block(nn.Module):
 
 
 class PatchEmbed(nn.Module):
+    """Embed an NCHW field as a BHWC grid of patch tokens."""
+
     def __init__(
         self,
         img_size=(224, 224),
@@ -260,6 +269,8 @@ class PatchEmbed(nn.Module):
 
 
 class SwinTransformer(nn.Module):
+    """Shifted-window transformer that maps an NCHW field to an NCHW field."""
+
     def __init__(
         self,
         img_size=(224, 224),
@@ -340,6 +351,7 @@ class SwinTransformer(nn.Module):
                 nn.init.ones_(module.weight)
 
     def forward_head(self, x):
+        """Fold the patch grid back into an NCHW field."""
         batch, height, width, _ = x.shape
         x = self.head(x).reshape(
             batch,
@@ -365,6 +377,7 @@ class SwinTransformer(nn.Module):
 
 
 def Swin(params, **kwargs):
+    """Build a serial SwinTransformer from a parameter object."""
     window_size = tuple(params.window_size)
     return SwinTransformer(
         img_size=tuple(params.img_size),

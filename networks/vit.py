@@ -1,3 +1,5 @@
+"""Serial vision transformer for NCHW fields."""
+
 import torch.nn.functional as F
 import torch
 import torch.nn as nn
@@ -5,6 +7,8 @@ from functools import partial
 from networks.helpers import trunc_normal_
 
 class MLP(nn.Module):
+    """Two-layer channel MLP with GELU and dropout."""
+
     def __init__(
         self,
         in_features,
@@ -31,6 +35,8 @@ class MLP(nn.Module):
 
 
 class Attention(nn.Module):
+    """Multi-head self-attention with separate query, key, and value projections."""
+
     def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0):
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
@@ -75,6 +81,8 @@ class Attention(nn.Module):
 
 
 class Block(nn.Module):
+    """Pre-norm attention and MLP block with residual connections."""
+
     def __init__(
         self,
         dim,
@@ -116,7 +124,7 @@ class Block(nn.Module):
 
 
 class PatchEmbed(nn.Module):
-    """Image to Patch Embedding"""
+    """Embed an NCHW field as a sequence of patch tokens."""
 
     def __init__(self, img_size=[224, 224], patch_size=16, in_chans=3, embed_dim=768):
         super().__init__()
@@ -139,6 +147,8 @@ class PatchEmbed(nn.Module):
 
 
 class VisionTransformer(nn.Module):
+    """Patch transformer that maps an NCHW field to an NCHW field."""
+
     def __init__(
         self,
         img_size=[224, 224],
@@ -207,6 +217,7 @@ class VisionTransformer(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def prepare_tokens(self, x):
+        """Embed patches and add the positional encoding."""
         B, nc, w, h = x.shape
         x = self.patch_embed(x)  # patch linear embedding
         # add positional encoding to each token
@@ -214,6 +225,7 @@ class VisionTransformer(nn.Module):
         return self.pos_drop(x)
 
     def forward_head(self, x):
+        """Project patch tokens back to an NCHW field."""
         B, _, _ = x.shape  # B x N x embed_dim
         x = x.reshape(B, self.patch_embed.h, self.patch_embed.w, self.embed_dim)
         B, h, w, _ = x.shape
@@ -240,6 +252,7 @@ class VisionTransformer(nn.Module):
 
 
 def ViT(params, **kwargs):
+    """Build a serial VisionTransformer from a parameter object."""
     model = VisionTransformer(
         img_size=tuple(params.img_size),
         in_chans=params.n_in_channels,

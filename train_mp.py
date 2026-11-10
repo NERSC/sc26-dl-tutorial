@@ -1,3 +1,5 @@
+"""Model-parallel training across data, tensor, and spatial groups."""
+
 import os
 import time
 import numpy as np
@@ -39,6 +41,7 @@ from utils.plots import generate_images
 
 
 def build_model(params, spatial_shard):
+    """Build the distributed network named by the parameters."""
     network = params.get("network", params.get("model", "vit")).lower()
     if network == "fno":
         logging.info("using FNO")
@@ -58,6 +61,7 @@ def build_model(params, spatial_shard):
 
 
 def train(params, writer, local_rank, world_rank, spatial_shard=None):
+    """Train one model-parallel replica for the configured number of iterations."""
     # set device and benchmark mode
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)

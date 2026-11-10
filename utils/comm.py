@@ -1,3 +1,5 @@
+"""Process groups for data, tensor, and spatial parallelism."""
+
 import os
 import logging
 from utils.logging_utils import disable_logging
@@ -15,24 +17,24 @@ _COMM_GROUPS = {}
 
 # routines for specific comm groups
 def get_names():
-    """Returns the names of all available communicators."""
+    """Return the names of the initialized communicators."""
     return _COMM_GROUPS.keys()
 
 
 def is_initialized(comm_name):
-    """check if initialized."""
+    """Return whether ``comm_name`` has been created."""
     return comm_name in _COMM_GROUPS
 
 
 def get_group(comm_name):
-    """Returns the group of a specified communicator."""
+    """Return the process group named ``comm_name``."""
     if not is_initialized(comm_name):
         raise IndexError(f"Error, comm {comm_name} not initialized.")
     return _COMM_GROUPS[comm_name]
 
 
 def get_size(comm_name):
-    """Returns the size of a specified communicator."""
+    """Return the number of ranks in ``comm_name``, or 1 when it is absent."""
     if (not dist.is_initialized()) or (not is_initialized(comm_name)):
         return 1
     else:
@@ -40,7 +42,7 @@ def get_size(comm_name):
 
 
 def get_rank(comm_name):
-    """Returns the rank in a specified communicator."""
+    """Return this process's rank in ``comm_name``, or 0 when it is absent."""
     if (not dist.is_initialized()) or (not is_initialized(comm_name)):
         return 0
     else:
@@ -56,7 +58,7 @@ def get_root(comm_name):
 
 # routines for world comms
 def get_world_size():
-    """Returns the world size"""
+    """Return the distributed world size, or 1 when distributed is not initialized."""
     if not dist.is_initialized():
         return 1
     else:
@@ -64,7 +66,7 @@ def get_world_size():
 
 
 def get_world_rank():
-    """Returns the world rank"""
+    """Return this process's global rank, or 0 when distributed is not initialized."""
     if not dist.is_initialized():
         return 0
     else:
@@ -72,7 +74,7 @@ def get_world_rank():
 
 
 def get_local_rank():
-    """Returns the local rank of the current process."""
+    """Return this process's rank on its node."""
     if not dist.is_initialized():
         return 0
     else:
@@ -84,6 +86,7 @@ def get_local_rank():
 
 
 def init(params, verbose=False):
+    """Initialize NCCL and the data, tensor, and spatial process groups."""
     # init torch.distributed
     init_process_group()
 
@@ -114,9 +117,7 @@ def init(params, verbose=False):
 
 
 def init_process_group():
-    """Initial torch distributed process group
-    Uses NCCL
-    """
+    """Initialize the NCCL process group from the distributed environment."""
     world_size = int(os.getenv("WORLD_SIZE", 1))
     world_rank = int(os.getenv("RANK", 0))
     port = int(os.getenv("MASTER_PORT", 0))
@@ -148,6 +149,7 @@ def init_process_group():
 def init_model_parallel_info(
     dp=1, tp=1, sp1=1, sp2=1, order="tp-sp1-sp2-dp", verbose=False
 ):
+    """Create the orthogonal process groups for the requested mesh."""
 
     world_size = get_world_size()
     world_rank = get_world_rank()
@@ -167,9 +169,7 @@ def init_model_parallel_info(
     )
 
     def generator_wrapper(group_type, **kwargs):
-        """The `RankGenerator` class produces a hyper-rectangle for a given set of
-        data, tensor, and two-dimensional spatial parallelism.
-        """
+        """Yield the rank lists for one communicator name."""
         ranks = rank_gen.get_ranks(group_type, **kwargs)
         for x in ranks:
             yield x

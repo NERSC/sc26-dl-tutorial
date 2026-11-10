@@ -1,3 +1,5 @@
+"""DALI external source that reads one rank's tile from the trajectory files."""
+
 import glob
 import logging
 import os
@@ -8,6 +10,8 @@ import torch
 
 
 class SynES:
+    """Callable external source yielding one input tile and its target tile."""
+
     def __init__(
         self,
         data_path,
