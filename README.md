@@ -1,858 +1,402 @@
-# SC26 Deep Learning at Scale Tutorial
+# Deep Learning at Scale - Engineering High Resolution Scientific AI models (SC26)
 
-This repository contains the example code material for the SC25 tutorial:
-*Deep Learning at Scale*.
+The tutorial trains image-to-image models on high-resolution fields: the same kind of data used in scientific applications such as weather and climate, fluid dynamics, seismology, cosmology, and experimental imaging. Every run in this repository uses 4096 × 4096 inputs from an example turbulence simulation. We start from a single GPU, speed up data loading and compute, then scale with data parallelism and with model parallelism across tensor and spatial dimensions.
+
+We focus on four architectures that represent the general architecture space of scientific AI models. These are Vision Transformer (ViT) based for global mixing, Local attention based models like Swin Transformer for local mixing, Fourier Neural Operators (FNO) for spectral mixing, and ConvNeXt for convolution based local mixing. Since each architecture class mixes information in different ways, we will see how this affects performance and scaling. 
+
+![High-resolution fields from weather, fluids, and experimental imaging](tutorial_images/domains.png)
+
+![ViT, Swin, FNO, and ConvNeXt](tutorial_images/models.png)
 
 **Contents**
+
 * [Links](#links)
-* [Installation](#installation-and-setup)
-* [Model, data, and code overview](#model-data-and-training-code-overview)
-* [Single GPU training](#single-gpu-training)
-* [Single GPU performance](#single-gpu-performance-profiling-and-optimization)
-* [Distributed training with data parallelism](#distributed-training-with-data-parallelism)
-* [Multi-GPU model parallelism](#model-parallelism)
+* [Setup](#setup)
+* [Models and data](#models-and-data)
+* [Configuration](#configuration)
+* [Single-GPU training](#single-gpu-training)
+* [Single-GPU performance](#single-gpu-performance)
+* [Data parallelism](#data-parallelism)
+* [Model parallelism](#model-parallelism)
 
 ## Links
 
-Tutorial slides: https://drive.google.com/drive/folders/10sUC4RK98DlapVuPPekcjysOnYgEUn_Z?usp=sharing
+Tutorial slides: https://drive.google.com/drive/folders/14OJ1mMEzsYa1MC2G2jfXJZpbE_HxoKzh?usp=sharing
 
-Join the Slack workspace: https://join.slack.com/t/nersc-dl-tutorial/shared_invite/zt-3icqbsg2e-ZaYsHXdMs~rpt6b_2yw6gQ
+Join the Slack workspace:
 
-NERSC JupyterHub: https://jupyter.nersc.gov
+## Setup
 
-Data download (only needed if you want to run our examples elsewhere): https://portal.nersc.gov/project/dasrepo/pharring/sc23_data
+Clone the repository and work from the top-level directory:
 
-## Installation and Setup
-
-### Software environment
-
-The instructions in this README are intended to be used with NERSC's Perlmutter machine.
-
-Access to the Perlmutter machine is provided for this tutorial via [jupyter.nersc.gov](https://jupyter.nersc.gov). 
-Training account setup instructions will be given during the session. Once you have your provided account credentials, you can log in to Jupyter via the link.
-Once logged into the hub, start a session by clicking the button for Perlmutter Login Node (other options will not work with this tutorial material).
-This will open up a session on a Perlmutter login node, from which you can submit jobs to the GPU nodes and monitor their progress.
-
-To begin, start a terminal from JupyterHub and clone this repository with:
 ```bash
-git clone https://github.com/NERSC/sc25-dl-tutorial.git
+git clone https://github.com/NERSC/sc26-dl-tutorial.git
+cd sc26-dl-tutorial
 ```
-You can use the Jupyter file browser to view and edit source files and scripts. For all of the example commands provided below, make sure you are running them from within the top-level folder of the repository. In your terminal, change to the directory with
+
+Training is launched with the Slurm scripts in the repository root:
+
+| Script | What it runs | How the GPUs are requested |
+|---|---|---|
+| [`submit_pm.sh`](submit_pm.sh) | [`train.py`](train.py) | one GPU per task (`sbatch -n 1` for a single GPU) |
+| [`submit_pm_dp.sh`](submit_pm_dp.sh) | [`train.py`](train.py) | 4 tasks per node (`sbatch -N <nodes>`) |
+| [`submit_pm_mp.sh`](submit_pm_mp.sh) | [`train_mp.py`](train_mp.py) | 4 tasks per node (`sbatch --nodes=<nodes>`) |
+
+Each script starts the tutorial container, mounts the dataset at `/data`, and mounts the log directory at `/logs`. Override the host paths with `DATADIR` and `LOGDIR`:
+
 ```bash
-cd sc25-dl-tutorial
+DATADIR=/path/to/data LOGDIR=/path/to/logs sbatch -n 1 ./submit_pm.sh --config=short
 ```
 
-For running slurm jobs on Perlmutter, we will use training accounts which are provided under the `ntrain5` project. The slurm script `submit_pm.sh` included in the repository is configured to work automatically as is, but if you submit your own custom jobs via `salloc` or `sbatch` you must include the following flags for slurm:
-* `-A ntrain5` is required for training accounts
-* `--reservation=<reservation_name>` is required to access the set of GPU nodes we have reserved for the duration of the tutorial. For the morning  session use `<reservation_name>` set to `sc25_dl_tutorial_1`, and for the afternoon session use `<reservation_name>` set to `sc25_dl_tutorial_2` (we have two different size reservations for the single-GPU and multi-GPU sections respectively)
+Anything after the script name is forwarded to the training program. Slurm writes the job output to a `.out` file in the directory you submitted from. `squeue --me` lists your job id.
 
-The code can be run using the `nersc/pytorch:25.06.01` docker container. On Perlmutter, docker containers are run via
-[shifter](https://docs.nersc.gov/development/containers/shifter/), and this container is already downloaded and automatically invoked by our job submission scripts. Our container is based on the [NVIDIA NGC 25.06 pytorch container](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel-25-06.html), with a few additional packages added.
+Profiles are captured with [Nsight Systems](https://developer.nvidia.com/nsight-systems). Install the host build for your laptop so you can open the `.nsys-rep` files the jobs write into `LOGDIR`. The download is on the [NVIDIA developer site](https://developer.nvidia.com/gameworksdownload#?search=nsight%20systems) (Linux, Windows, or macOS). An NVIDIA developer account is required for the download.
 
-### Installing Nsight Systems
-In this tutorial, we will be generating profile files using NVIDIA Nsight Systems on the remote systems. In order to open and view these
-files on your local computer, you will need to install the Nsight Systems program, which you can download [here](https://developer.nvidia.com/gameworksdownload#?search=nsight%20systems). Select the download option required for your system (e.g. Mac OS host for MacOS, Window Host for Windows, or Linux Host .rpm/.deb/.run for Linux). You may need to sign up and create a login to NVIDIA's developer program if you do not
-already have an account to access the download. Proceed to run and install the program using your selected installation method.
+## Models and data
 
-## Model, data, and training code overview
+All four networks map an input field to a later field. The implementation for each one is a serial module used by [`train.py`](train.py) and a distributed module used by [`train_mp.py`](train_mp.py).
 
-The model in this repository is adapted from modern applications of deep learning for weather forecasting, e.g. [FourCastNet](https://arxiv.org/abs/2202.11214), [GraphCast](https://arxiv.org/abs/2212.12794), [Pangu-Weather](https://arxiv.org/abs/2211.02556), and others. These models are trained on a combination of observed and simulated data describing the atmospheric state on Earth over the past several decades, and they achieve impressive performance in terms of accuracy and forecast speed when compared against traditional numerical weather prediction (NWP) models.
+| Model | What mixes the field | Serial | Distributed |
+|---|---|---|---|
+| ViT | Attention across all patch tokens | [`networks/vit.py`](networks/vit.py) | [`networks/vit_mp.py`](networks/vit_mp.py), and [`networks/vit_te.py`](networks/vit_te.py) for Transformer Engine |
+| Swin | Attention inside shifted windows | [`networks/swin.py`](networks/swin.py) | [`networks/swin_mp.py`](networks/swin_mp.py) |
+| FNO | A spectral convolution over the whole grid | [`networks/fno.py`](networks/fno.py) | [`networks/fno_mp.py`](networks/fno_mp.py) |
+| ConvNeXt | A depthwise convolution over nearby cells, then a channel MLP | [`networks/convnext.py`](networks/convnext.py) | [`networks/convnext_mp.py`](networks/convnext_mp.py) |
 
-![weather forecasting animation](tutorial_images/weather_forecasting.gif)
+The ViT and Swin embed the image as patches and run transformer blocks. The ViT attends over the full token sequence. Swin attends inside windows and shifts those windows on alternate blocks, so each layer only sees a local neighborhood and later layers grow the receptive field. The FNO stays on the grid: each block applies a 2D FFT, mixes channels at the retained wavenumbers, and transforms back. ConvNeXt also stays at constant resolution. A patch stem lifts the field, depthwise convolutions mix neighbors, and a pointwise MLP mixes channels.
 
-For these examples we will be using a [vision transformer](https://arxiv.org/abs/2010.11929) (ViT) architecture, for which our implementation can be found in [`networks/vit.py`](networks/vit.py). ViTs are a widely-used architecture in computer vision, known for scaling well to large datasets and being able to model long-range dependencies easily via the use of self-attention layers. While 'vanilla' ViTs are not necessarily state-of-the-art on the weather forecasting task, they are a good model to use for educational purposes as they are widely used in a variety of applications and the techniques outlined here (e.g. channel-wise tensor parallelism) would transfer well to other applications (e.g. NLP/LLMs).
+The hands-on path below uses the ViT configs in [`config/ViT.yaml`](config/ViT.yaml). The same scripts train the other three networks by pointing `--yaml_config` at their file. See [Configuration](#configuration).
 
-![vision transformer schematic](tutorial_images/vit_schematic.png)
+The dataset is a set of synthetic trajectories stored as HDF5. Each file holds a time series of 4096 × 4096 fields with 2 channels. A sample is a pair of snapshots separated by `dt` steps: the network sees the first and is trained to predict the second. Channel mean and standard deviation come from `stats_trajectory.h5`. Files are split 90 / 10 into training and validation.
 
-Data-driven weather models are typically trained on the [ERA5 reanalysis dataset](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5) from the European Center for Medium-range Weather Forecasts (ECMWF). This dataset represents 40 years of atmospheric data on a 25km global grid, combining simulation outputs assimilated with observations. The basic data loading pipeline for training models is defined in [`utils/data_loader.py`](utils/data_loader.py), whose primary components are:
-* The `ERA5Dataset`, which accesses the data stored on disk and serves input-output pairs of the atmospheric variables for training and validation. Each pair is a randomly-sampled snapshots of the atmosphere, separated by a 6 hour timestep. The model is given the first snapshot as input and is trained to predict the snapshot 6 hours later.
-* For this repository, we will be using a spatially-downsampled version of the data so training runs a little faster.
-* The above dataset object is passed to a PyTorch `DataLoader` which takes the samples and combines them into a batch for each training step.
+[`utils/data_loader.py`](utils/data_loader.py) is the PyTorch loader (`SynDataset` plus `DataLoader`). [`utils/data_loader_dali.py`](utils/data_loader_dali.py) is the DALI loader. `data_loader_config` in the YAML file selects which one is built. When the run is distributed, samples are partitioned across the data-parallel ranks. `spatial_read_mode` controls spatial sharding: `local` reads one rank's tile of each image, and `all` reads the full image and slices it afterward.
 
-It is common practice to decay the learning rate according to some schedule as the model trains, so that the optimizer can settle into sharper minima during gradient descent. Here we opt for the cosine learning rate decay schedule, which starts at an intial learning rate and decays continuously throughout training according to a cosine function. This is handled by the `LambdaLR` or `CosineAnnealingLR` utilities from PyTorch, set in [`train.py`](train.py) -- the `LambdaLR` uses custom logic to implement learning rate warm-up if desired for distributed training.
+[`train.py`](train.py) and [`train_mp.py`](train_mp.py) then:
 
-As we will see in the [Single GPU performance profiling and optimization](#Single-GPU-performance-profiling-and-optimization) section, we'll be able to speed up the baseline data loading pipeline significantly by making various improvements. Another option introduced in that section is to do data loading using NVIDIA's DALI library, for which the implementation can be found in [`utils/data_loader_dali.py`](utils/data_loader_dali.py).
+1. Build the network named by the config, an Adam optimizer, and a mean-squared-error loss.
+2. Step through batches: copy the batch to the GPU, run the forward pass, call `backward()`, and update the weights.
+3. Evaluate on the validation set and write scalars for TensorBoard: training loss, validation loss, RMSE of the first output channel, learning rate, and samples per second.
 
-The script to train the model is [`train.py`](train.py), which uses the following arguments to load the desired training setup:
-```
---yaml_config YAML_CONFIG   path to yaml file containing training configs
---config CONFIG             name of desired config in yaml file
-```
+The learning rate follows a cosine decay over `num_iters` steps (`CosineAnnealingLR`). A config with `warmup` greater than 0 uses `LambdaLR` so the rate rises linearly for that many steps and then follows the same cosine.
 
-See [Configuration files and choosing a network](#configuration-files-and-choosing-a-network) for what is in these files and how to create your own.
+NVTX ranges mark data copy, forward, and the optimizer step. On the fourth epoch (epoch index 3) the scripts call `torch.cuda.profiler.start()` and `stop()`, which is the window Nsight Systems records. A profiled config needs at least four epochs.
 
-Based on the selected configuration, the train script will then:
-1.  Set up the data loaders and construct our ViT model, the Adam optimizer, and our L2 loss function.
-2.  Loop over training epochs to run the training. See if you can identify the following key components: 
-    * Looping over data batches from our data loader.
-    * Applying the forward pass of the model and computing the loss function.
-    * Calling `backward()` on the loss value to backpropagate gradients. Note the use of the `grad_scaler` will be explained below when enabling mixed precision.
-    * Applying the model to the validation dataset and logging training and validation metrics to visualize in TensorBoard (see if you can find where we construct the TensorBoard `SummaryWriter` and where our specific metrics are logged via the `add_scalar` call).
+## Configuration
 
-More info on the model and data can be found in the [slides](https://drive.google.com/drive/folders/10sUC4RK98DlapVuPPekcjysOnYgEUn_Z?usp=sharing). If you are experimenting with this repository after the tutorial date, you can download the data from here: https://portal.nersc.gov/project/dasrepo/pharring/sc23_data.
-Note that you will have to adjust the data path in `submit_pm.sh` to point your personal copy after downloading.
+A run is selected with two arguments. The submission scripts forward them unchanged:
 
-### Configuration files and choosing a network
-
-All training settings live in YAML files in [`config/`](config), and each file holds several *named configs*.
-A run is selected with two flags, which the submission scripts (`submit_pm.sh`, `submit_pm_dp.sh`, `submit_pm_mp.sh`) forward to the training script:
-```
+```text
 --yaml_config PATH    # which file, default ./config/ViT.yaml
 --config NAME         # which named config in that file, default base
 ```
 
+[`train.py`](train.py) also accepts `--run_num` and `--expdir`. [`train_mp.py`](train_mp.py) adds the mesh:
+
+```text
+--tp     tensor-parallel size, default 1
+--sp1    first spatial dimension, default 1
+--sp2    second spatial dimension, default 1
+--order  rank placement, default tp-sp1-sp2-dp
+```
+
+Every other setting is a key in the YAML file. The files use anchors, so a named config inherits from another and lists only what it changes.
+
 | File | Network | Named configs |
 |---|---|---|
-| [`config/ViT.yaml`](config/ViT.yaml) | Vision transformer ([`networks/vit.py`](networks/vit.py), model-parallel: [`networks/vit_mp.py`](networks/vit_mp.py)) | `base`, `short`, `short_opt`, `opt`, `mp`, `mp_te` |
-| [`config/FNO.yaml`](config/FNO.yaml) | Fourier neural operator ([`networks/fno.py`](networks/fno.py), model-parallel: [`networks/fno_mp.py`](networks/fno_mp.py)) | `base`, `short`, `short_opt`, `opt`, `mp` |
+| [`config/ViT.yaml`](config/ViT.yaml) | ViT (`network` omitted; the default) | `base`, `short`, `short_opt`, `short_opt_dali`, `short_opt_dali_dp`, `short_opt_big`, `opt_big`, `short_mp`, `short_mp_te` |
+| [`config/swin.yaml`](config/swin.yaml) | Swin (`network: swin`) | `base`, `short`, `short_opt`, `opt`, `mp` |
+| [`config/FNO.yaml`](config/FNO.yaml) | FNO (`network: fno`) | `base`, `short`, `short_opt`, `opt`, `mp`, `mp_resample`, `mp_vit_matched`, `embed_large` |
+| [`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) | ConvNeXt (`network: convnext`) | `small`, `big` |
 
-The network is chosen by the `network` key inside the config: it is absent in `ViT.yaml` (the default is the ViT) and `network: 'fno'` in `FNO.yaml`.
-`train.py` (single GPU and data parallel) and `train_mp.py` (model parallel) both honor it, so the same flags work for either network:
-```
-# ViT, the default
-sbatch -n 1 -t 20 ./submit_pm.sh --config=short
-
-# FNO, a quick single-GPU run
-sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config short
-
-# FNO, model parallel: the 2x2 spatial tile shards H over sp1 and W over sp2, DP fills the rest (16 GPUs here)
-sbatch --nodes=4 submit_pm_mp.sh --yaml_config ./config/FNO.yaml --config mp --tp=1 --sp1=2 --sp2=2 --run_num=fno_sp2x2
-```
-
-The data and training keys (`img_size`, `n_in_channels`, `global_batch_size`, `lr`, `data_loader_config`, ...) are shared by both files. The model keys differ:
+Shared keys cover the image (`img_size`, `n_in_channels`, `n_out_channels`), the optimization (`global_batch_size`, `lr`, `num_iters`, `amp_mode`, `enable_fused`, `enable_jit`), and the loader (`data_loader_config`, `num_data_workers`, `spatial_read_mode`, `limit_nsamples`, `limit_nsamples_val`). Model keys differ:
 
 | Network | Model keys |
 |---|---|
-| ViT | `embed_dim`, `depth`, `num_heads`, `patch_size`, `dropout` |
-| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers in h and w after truncation, `None` keeps all), `mlp_ratio` (width of the per-block channel MLP, `0` disables it), `spectral_init_k0` (starts the spectral weights of high wavenumbers smaller, by `1/(1+(k/k0)^2)` with `k` in grid-index units; `None` disables, see the plan), `downsample` (Fourier downsampling factor per axis: the blocks run on a latent grid that many times coarser, `downsample^2` times less activation memory; `1` is the plain FNO), `lift_dim` (channels of the full-grid lift and projection when downsampling, default 16) and `resample_skip` (add the full-grid lift features after the upsampling) |
+| ViT | `embed_dim`, `depth`, `num_heads`, `patch_size`, `dropout`, `model_backend` (`pytorch` or `transformer-engine`) |
+| Swin | `embed_dim`, `depth`, `num_heads`, `patch_size`, `window_size`, `dropout` |
+| FNO | `embed_dim` (hidden channels), `depth`, `modes_kh` and `modes_kw` (retained wavenumbers; `None` keeps all), `mlp_ratio` (width of the channel MLP; `0` disables it), `downsample` (Fourier coarsening of the grid the blocks run on), `lift_dim`, `resample_skip` |
+| ConvNeXt | `embed_dim`, `depth`, `patch_size`, `kernel_size`, `layer_scale_init` |
 
-Two things to keep in mind for the FNO:
-* It works at the full image resolution in every layer, so its activation memory scales with `embed_dim` times the number of grid points. The `mp` config therefore uses `embed_dim: 16` for the 4096 x 4096 images, the single-GPU configs use a global batch size of 1, and `mp` uses 8 on 16 GPUs (16 ran out of 40 GB). See [`networks/plans/fno/analysis.md`](networks/plans/fno/analysis.md) for the numbers.
-* With model parallelism, `sp1` and `sp2` shard the image in H and W, and the FFT transposes the data between them. Like the ViT, the FNO is sharded at its interface: each rank loads only its (H, W) tile of every image (`spatial_read_mode: 'local'`), the model takes and returns that tile, and the loss and metrics are all-reduced over the spatial group, so no rank holds the full image. The channel count (`embed_dim`), the image size and the retained mode counts must each be at least `sp1` and `sp2`, otherwise the model raises an error when it is built. Use `--tp=1`: the FNO has almost no weights to shard with tensor parallelism. See [`networks/plans/fno/parallelism-plan.md`](networks/plans/fno/parallelism-plan.md).
+The number of tokens in ViT and Swin is `(4096 / patch_size)^2`. For any distributed run:
 
+```text
+world_size = dp * tp * sp1 * sp2
+local_batch_size = global_batch_size / dp
+```
 
-#### ConvNeXt
+`dp` is whatever is left after the model-parallel flags claim their GPUs. `global_batch_size` has to be divisible by `dp`.
 
-ConvNeXt predicts fields using a patch stem, constant-resolution depthwise-convolution blocks with channel MLPs, and patch reconstruction. Its spatial implementation exchanges neighboring halos and supports DP plus height/width/2D spatial partitioning.
+### ViT path through the tutorial
 
-[`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) provides two BF16/DALI presets matching the ViT patch sizes, widths and depths: `small` (32, 512, 12; global batch 4) and `big` (16, 1536, 16; global batch 4). Both use 1,024 training samples and 32 validation samples. With the data/log mounts configured as above:
+The sections below follow this sequence. Image size is 4096 × 4096 and the head count is 16 throughout.
+
+| Stage | Config | GPUs and mesh | What changes |
+|---|---|---|---|
+| Baseline | `short` | 1 GPU | FP32, PyTorch loader, 0 workers. 64 training samples, 16 validation samples, 80 iterations. ViT is embed 512, depth 12, patch 32 (16,384 tokens). Global batch 4. |
+| Single-GPU optimizations | `short_opt` | 1 GPU | 2 loader workers, BF16, `torch.compile`, fused Adam. Same samples and same model. |
+| DALI | `short_opt_dali` | 1 GPU | Same as `short_opt`, with the DALI loader. |
+| Data parallel | `short_opt_dali_dp` | 4 GPUs, `dp=4` | Same model and optimizations. Global batch 16, so the local batch stays 4. |
+| Larger model, data parallel | `short_opt_big` | 16 GPUs, `dp=16` | Patch 16 and embed 1024 (65,536 tokens). Global batch 16, local batch 1. |
+| Spatial parallel | `short_mp` | 16 GPUs, `dp=4`, `sp1=4` | Embed 1536, depth 16, patch 16. Global batch 4, local batch 1. Compilation off. |
+| Transformer Engine | `short_mp_te` | 16 GPUs, `dp=4`, `sp1=4` | Same model as `short_mp`, built with Transformer Engine. |
+
+`base` and `opt_big` are the long versions of `short` and `short_opt_big` (`num_iters: 30000`). Use the `short*` configs in the session.
+
+### Other networks
+
+Swin uses the same patch-and-window idea with a local attention pattern. `window_size` has to divide the patch grid owned by each spatial rank, so a mesh that splits a window in half will fail when the model is built. Launch the short single-GPU config with:
 
 ```bash
-# One GPU
-sbatch --nodes=1 --ntasks=1 --gpus-per-node=1 submit_pm.sh --yaml_config ./config/ConvNeXt.yaml --config small --run_num=convnext_small
-# Two four-GPU nodes: DP2 x SP4, two examples per spatial replica (global batch 4)
-sbatch --nodes=2 submit_pm_mp.sh --yaml_config ./config/ConvNeXt.yaml --config big --tp=1 --sp1=4 --sp2=1 --order=tp-sp1-sp2-dp --run_num=convnext_big
+sbatch -n 1 ./submit_pm.sh --yaml_config ./config/swin.yaml --config short
 ```
 
-The presets use local reads: prefer height-only splitting to preserve contiguous blocks of complete rows. For layouts that split width, `spatial_read_mode: 'all'` reads full images on the CPU before cropping each rank's tile.
+The FNO runs at the full grid resolution in every block, so activation memory scales with `embed_dim` times the number of grid points. The single-GPU configs use `embed_dim: 16` and a global batch of 1. Its spectral weights are complex, so the configs leave fused Adam off and use BF16 when mixed precision is on: FP16 loss scaling does not support those parameters. Spatial parallelism shards height across `sp1` and width across `sp2`, and the distributed FFT transposes between those axes. The configs use `--tp=1`: the spectral weights are small beside the activation traffic, and the transposes already move the field. The channel count has to be at least `sp1` and at least `sp2`, because those transposes also split channels. `downsample` greater than 1 runs the blocks on a coarser latent grid (`mp_resample`, `mp_vit_matched`, `embed_large`).
 
-The FNO configs for wider models use Fourier downsampling, since the blocks' activation memory scales with the number of grid points they run on:
-* `mp_resample`: `downsample: 2`, 64 channels, at about the memory of `mp` with 16.
-* `mp_vit_matched`: parameter-matched to the ViT `base` config (48.3M parameters): `downsample: 2`, 76 channels, depth 4, 32 x 32 modes give 47.4M real parameters (a complex weight counts as two). Equal parameter counts do not mean equal cost, the FNO spends its FLOPs on FFTs and its activations scale with the latent grid.
-* `embed_large`: 2048 channels on a 4x coarser latent grid (1024 x 1024 for the 4096 x 4096 images), 16 x 16 modes, global batch 1. Launch it on 16 GPUs with `--tp=1 --sp1=4 --sp2=4`; tensor parallelism does not shard the spectral weights, which dominate at this width. 2048 channels with `downsample: 2` do not fit 40 GB per GPU. The learning rate and the other training settings of this config are inherited from `mp` and not tuned.
+```bash
+# one GPU
+sbatch -n 1 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config short
 
+# 16 GPUs: dp=4, a 2x2 spatial tile
+sbatch --nodes=4 ./submit_pm_mp.sh --yaml_config ./config/FNO.yaml --config mp --tp=1 --sp1=2 --sp2=2 --run_num=fno_sp2x2
+```
 
-#### Creating your own config
+ConvNeXt replicates its weights and exchanges a halo of neighboring cells before each depthwise convolution. The distributed model supports data and spatial parallelism with `--tp=1`. `small` matches the ViT baseline width (patch 32, embed 512, depth 12, global batch 4). `big` matches the large ViT (patch 16, embed 1536, depth 16).
 
-Copy a named config in the YAML file and change what you need. The configs inherit from each other with YAML anchors, so a new config only has to list the differences:
+```bash
+sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ConvNeXt.yaml --config small --run_num=convnext_small
+
+# 8 GPUs: dp=2, sp1=4, local batch 2, global batch 4
+sbatch --nodes=2 ./submit_pm_mp.sh --yaml_config ./config/ConvNeXt.yaml --config big --tp=1 --sp1=4 --sp2=1 --run_num=convnext_big
+```
+
+Prefer a height-only split (`sp2=1`) when `spatial_read_mode` is `local`, so each rank reads a contiguous block of complete rows. Layouts that also split width are set up for `spatial_read_mode: all`.
+
+### Writing a new config
+
+Copy a named config and change the keys you care about:
+
 ```yaml
-# in config/FNO.yaml
-my_fno:
-  <<: *base          # start from `base` and override
-  embed_dim: 32
-  modes_kh: 32
-  modes_kw: 32
-  num_iters: 500
-```
-```
-sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config my_fno
-```
-To start a new file, copy an existing one: it needs the same data, training and communication keys, plus the model keys of the network you want.
-
-Notes:
-* The command-line options are `--yaml_config`, `--config`, `--run_num` and `--expdir` (plus `--tp`, `--sp1`, `--sp2` and `--order` for `train_mp.py`). Every other setting is changed in the YAML file.
-* Results are written to `<expdir>/<config>/<N>GPU/<run_num>`, and only the config *name* is part of the path. The two files both have configs named `base` and `mp`, so give runs from different files different `--run_num`s (as in `--run_num=fno_sp2x2` above), otherwise they write to the same directory.
-* **Choosing where output goes.** Two paths are involved. The submission scripts mount a host directory as `/logs` in the container, by default `$SCRATCH/sc25-dl-tutorial/logs`, and the data directory as `/data`. Set `LOGDIR` (and `DATADIR`) in the environment to use other host directories, for example after a quota error on scratch:
-  ```
-  LOGDIR=$PSCRATCH/fno_logs sbatch -n 1 -t 20 ./submit_pm.sh --yaml_config ./config/FNO.yaml --config short
-  ```
-  The `expdir` of the config (`/logs` by default) is a path *inside* the container, so it has to lie below a mounted directory. `--expdir /logs/runs_a` writes to `runs_a` inside `LOGDIR`, and `--expdir` overrides `expdir` of the config for a single run.
-
-## Single GPU training
-
-First, let us look at the performance of the training script without optimizations on a single GPU.
-
-On Perlmutter for the tutorial, we will be submitting jobs to the batch queue. To submit this job, use the following command:
-```
-sbatch -n 1 -t 20 ./submit_pm.sh --config=short
-```
-`submit_pm.sh` is a batch submission script that defines resources to be requested by SLURM as well as the command to run.
-Note that any arguments for `train.py`, such as the desired config (`--config`), can be added after `submit_pm.sh` when submitting, and they will be passed to `train.py` properly.
-When using batch submission, you can see the job output by viewing the file `vit-era5-<jobid>.out` in the submission
-directory. You can find the job id of your job using the command `squeue --me` and looking at the first column of the output.
-
-This will run 128 training iterations on a single GPU using a default batch size of 16.
-See [`config/ViT.yaml`](config/ViT.yaml) for specific configuration details.
-Note we will use the default batch size for the optimization work in the next section
-and will push beyond to larger batch sizes in the distributed training section.
-
-While the model predicts many atmospheric variables, we will focus on the prediction error of surface wind at 10m `u10` to represent model quality.
-In the baseline configuration, the model converges to a u10 RMSE of about `0.13` on
-the validation dataset in about 22k training iterations. This takes around 22 hours hours to run, so to save time we have already included an example TensorBoard log for the `base` config in the `example_logs` directory for you.
-Note that, to run this, you would submit your job with `--config=base`.
-We want to compare our training results against the `base` config baseline, and TensorBoard makes this easy as long as all training runs are stored in the same place. 
-To copy the example TensorBoard log to the scratch directory where our training jobs will output their logs, do
-```
-mkdir -p $SCRATCH/sc25-dl-tutorial/logs
-cp -r ./example_logs/base $SCRATCH/sc25-dl-tutorial/logs
+# in config/ViT.yaml
+my_vit:
+  <<: *short_opt
+  embed_dim: 768
+  num_iters: 80
 ```
 
-This scratch directory will serve as our log directory (all results including profiles will be written here). To view results in TensorBoard, open the [`start_tensorboard.ipynb`](start_tensorboard.ipynb) notebook and follow the instructions in it to launch a TensorBoard session in your browser. Once you have TensorBoard open, you should see a dashboard with data for the loss values, learning rate, and average iterations per second. Looking at the validation loss for the `base` config, you should see the following training curve:
-![baseline training](tutorial_images/baseline_tb.png)
-
-As our training with the `short` config runs, it should also dump the training metrics to the TensorBoard directory, and TensorBoard will parse the data and display it for you. You can hit the refresh button in the upper-right corner of TensorBoard to update the plots with the latest data.
-
-## Single GPU performance profiling and optimization
-
-This is the performance of the baseline script for the first three epochs on a 40GB A100 card with batch size 16 using the `short` config, which limits the number of training and validation samples to 512 and 128 samples respectively:
-```
-2025-11-11 09:08:26,273 - root - INFO - Time taken for epoch 1 is 58.777251 sec, avg 8.710853 samples/sec
-2025-11-11 09:08:26,273 - root - INFO -   Avg train loss=0.577625
-2025-11-11 09:08:31,858 - root - INFO -   Avg val loss=0.42094624042510986
-2025-11-11 09:08:31,859 - root - INFO -   Total validation time: 4.857330560684204 sec
-2025-11-11 09:09:26,883 - root - INFO - Time taken for epoch 2 is 55.020942 sec, avg 9.305548 samples/sec
-2025-11-11 09:09:26,884 - root - INFO -   Avg train loss=0.389357
-2025-11-11 09:09:32,268 - root - INFO -   Avg val loss=0.37273770570755005
-2025-11-11 09:09:32,268 - root - INFO -   Total validation time: 4.682427883148193 sec
-2025-11-11 09:10:28,166 - root - INFO - Time taken for epoch 3 is 55.894556 sec, avg 9.160105 samples/sec
-2025-11-11 09:10:28,166 - root - INFO -   Avg train loss=0.354964
-2025-11-11 09:10:33,451 - root - INFO -   Avg val loss=0.35277312994003296
-2025-11-11 09:10:33,451 - root - INFO -   Total validation time: 4.57039737701416 sec
-```
-After the first epoch, we see that the throughput achieved is about 9 samples/s.
-
-### Profiling with Nsight Systems
-#### Adding NVTX ranges and profiler controls
-Before generating a profile with Nsight, we can add NVTX ranges to the script to add context to the produced timeline.
-We can add some manually defined NVTX ranges to the code using `torch.cuda.nvtx.range_push` and `torch.cuda.nvtx.range_pop`.
-We can also add calls to `torch.cuda.profiler.start()` and `torch.cuda.profiler.stop()` to control the duration of the profiling
-(e.g., limit profiling to single epoch). You can `grep` through `train.py` for these API calls to see what we've added in this example.
-
-To generate a profile using our scripts on Perlmutter, run the following command: 
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 -t 20 submit_pm.sh --config=short
-```
-This command will run four epochs of the training script, profiling only the last epoch run. It will produce `${LOGDIR}/baseline.0.nsys-rep` that can be opened in the Nsight System's program. All three submission scripts append the Slurm rank to `PROFILE_OUTPUT` (default: `profile`), so each rank writes a separate report. They also enable `--trace-fork-before-exec=true` to capture forked PyTorch worker processes. The arg `--trace=cuda,nvtx` is optional and is used here to disable OS Runtime tracing for speed. The arg `-c cudaProfilerApi` instructs the profiler to only profile the duration of the runtime between the `torch.cuda.profiler.start()` and `torch.cuda.profiler.stop()` calls.
-
-To view the profile, download (copy) the generated profile (this will be in your log directory in your scratch) to your local computer and open it in Nsight Systems.
-Loading this profile ([`baseline.nsys-rep`](sample_nsys_profiles/baseline.nsys-rep)) in Nsight Systems will look like this:
-![NSYS Baseline](tutorial_images/nsys_baseline.png)
-
-From this zoomed out view, we can see some idle gaps between training iterations. These gaps are due to the data loading, which we will address in the next section.
-
-Beyond this, we can zoom into a single iteration and get an idea of where compute time is being spent:
-![NSYS Baseline zoomed](tutorial_images/nsys_baseline_zoomed.png)
-
-
-### Data loading optimizations
-#### Improving the native PyTorch dataloader performance
-The PyTorch dataloader has several knobs we can adjust to improve performance. If you look at the `DataLoader` initialization in
-`utils/data_loader.py`, you'll see we've already set several useful options, like `pin_memory` and `persistent_workers`.
-`pin_memory` has the data loader read input data into pinned host memory, which typically yields better host-to-device and device-to-host
-memcopy bandwidth. `persistent_workers` allows PyTorch to reuse workers between epochs, instead of the default behavior which is to
-respawn them. One knob we've left to adjust is the `num_workers` argument, which we can control via the `--num_data_workers` command
-line arg to our script. The default used by PyTorch is `num_workers=0`, which runs data loading *sequentially* in the training Python process. This is one source of the large gaps we observed in the first profile. By setting `num_workers>0`, we enable PyTorch to use multiprocessing to perform data loading in a side process to hide this cost. We can experiment with the number of workers to see if performance is improved.
-
-We can run this experiment on Perlmutter by running the following command:
-```
-sbatch -n 1 -t 20 ./submit_pm.sh --config=short --num_data_workers <value of your choice>
+```bash
+sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config my_vit
 ```
 
-For example:
+A new file needs the same data, training, and communication keys as the existing ones, plus the model keys for the network.
 
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline_dw8 sbatch -n 1 -t 20 ./submit_pm.sh --config=short --num_data_workers 8 --run_num=nw8
-```
+Two paths decide where files land. The submission scripts mount `LOGDIR` at `/logs` inside the container. The config key `expdir` (default `/logs`) is a path inside the container, so it has to sit under a mounted directory. `--expdir /logs/runs_a` writes to `runs_a` under `LOGDIR` and overrides the config for that job.
 
-You can use the `run_num` argument to further sub-tag the same configuration. Here, we used `run_num=nw8`.
+[`train.py`](train.py) writes to `<expdir>/<config>/<N>GPU/<run_num>/`. [`train_mp.py`](train_mp.py) writes to `<expdir>/<config>/<M>MP/<run_num>/`, where `M` is `tp * sp1 * sp2`. The directory name uses the config name only, and several files reuse names such as `short` and `mp`. Set `--run_num` when two runs would otherwise share a directory.
 
-This is the performance of the training script for the first three epochs on a 40GB A100 card with batch size 16 and 8 data workers:
-```
-2025-11-11 09:08:13,613 - root - INFO - Time taken for epoch 1 is 45.767648 sec, avg 11.186941 samples/sec
-2025-11-11 09:08:13,614 - root - INFO -   Avg train loss=0.582611
-2025-11-11 09:08:19,841 - root - INFO -   Avg val loss=0.4245404005050659
-2025-11-11 09:08:19,842 - root - INFO -   Total validation time: 5.438702583312988 sec
-2025-11-11 09:09:00,739 - root - INFO - Time taken for epoch 2 is 40.894653 sec, avg 12.519974 samples/sec
-2025-11-11 09:09:00,740 - root - INFO -   Avg train loss=0.392183
-2025-11-11 09:09:07,322 - root - INFO -   Avg val loss=0.37554070353507996
-2025-11-11 09:09:07,322 - root - INFO -   Total validation time: 5.842737913131714 sec
-2025-11-11 09:09:50,106 - root - INFO - Time taken for epoch 3 is 42.780101 sec, avg 11.968181 samples/sec
-2025-11-11 09:09:50,106 - root - INFO -   Avg train loss=0.357540
-2025-11-11 09:09:55,456 - root - INFO -   Avg val loss=0.3546229898929596
-2025-11-11 09:09:55,457 - root - INFO -   Total validation time: 4.614475727081299 sec
+## Single-GPU training
+
+The baseline is the `short` config: one GPU, FP32, the PyTorch loader, and no extra workers. Submit it with:
+
+```bash
+sbatch -n 1 ./submit_pm.sh --config=short
 ```
 
-Increasing the number of workers to 8 improves throughput to around 12 samples per second. You can play around with this number but typically 2 - 8 gives you good performance. At some point, you will hit diminishing returns and performance will start to degrade.
+The job trains the ViT in the table above for 80 iterations. Logs, TensorBoard event files, and `out.log` are written under `LOGDIR/short/1GPU/00/`.
 
-We can run the 8 worker configuration through profiler using the instructions in the previous section with the added `--num_data_workers`
-argument and load that profile in Nsight Systems. This is what this profile ([`baseline_dw8.nsys-rep`](sample_nsys_profiles/baseline_dw8.nsys-rep)) looks like:
-![NSYS Native Data](tutorial_images/nsys_8workers.png)
+Open [`start_tensorboard.ipynb`](start_tensorboard.ipynb) and point it at `LOGDIR` to plot the scalars the training loop records.
 
-and zoomed in:
-![NSYS Native Data Zoomed](tutorial_images/nsys_8workers_zoomed.png)
+> **TODO:** baseline training curve (loss, validation RMSE, samples/sec) for `short`.
 
-With 4 or 8 data workers, the idle gaps between steps are resolved, improving the throughput. Looking at the zoomed in profile, we
-still see that the H2D copy in of the input data (i.e. the light green activity at the beginning of the step) takes some time and runs in same CUDA stream as the compute. One option here is to implement a prefetching
-mechanism in PyTorch directly using CUDA streams to concurrently load and copy in the next batch of input during the current batch, however
-this is left as an exercise outside of this tutorial. A good example of this can be found in [here](https://github.com/NVIDIA/DeepLearningExamples/blob/41f582bd9f65f6ebede77532b7cd64f038a8a380/PyTorch/Classification/ConvNets/image_classification/dataloaders.py#L354)
+## Single-GPU performance
 
-#### Using NVIDIA DALI
-While we were able to get more performance out of the PyTorch native DataLoader, there are several potential overheads we cannot overcome in
-PyTorch alone:
-1. The PyTorch DataLoader will use CPU operations for all I/O operations as well as data augmentations
-2. The PyTorch DataLoader uses multi-processing to spawn data workers, which has performance overheads compared to true threads
+`short` is the reference point for the optimizations. The loader runs inside the training process (`num_data_workers: 0`), and the compute runs in FP32.
 
-The NVIDIA DALI library is a data loading library that can address both of these points:
-1. DALI can perform a wide array of data augmentation operations on the GPU, benefitting from acceleration relative to the CPU.
-2. DALI maintains its own worker threads in the C++ backend, enabling much more performant threading and concurrent operation.
+> **TODO:** throughput after the first epoch for `short`, and the Nsight Systems timeline (zoomed out, and one iteration).
 
-For this tutorial, we've provided an alternative data loader using DALI to accelerate the data augmentations used in this training script that can be found in `utils/data_loader_dali.py`. This data loader is enabled via the command line
-argument `--data_loader_config=dali` to the training script.
+### Capturing a profile
 
-We can run this experiment on Perlmutter using DALI with 8 worker threads by running the following command:
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline_dw8_dali sbatch -n 1 -t 20 ./submit_pm.sh --config=short --num_data_workers 8 --data_loader_config=dali --run_num=nw8_dali
+`train.py` already has NVTX ranges around the batch copy, the forward pass, and the optimizer step, and it enables the CUDA profiler for the fourth epoch. Turn on capture in the job script with:
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=short sbatch -n 1 ./submit_pm.sh --config=short
 ```
 
-This is the performance of with DALI and 8 data workers:
-```
-2025-11-11 09:08:57,850 - root - INFO - Time taken for epoch 1 is 37.772197 sec, avg 13.131352 samples/sec
-2025-11-11 09:08:57,851 - root - INFO -   Avg train loss=0.585217
-2025-11-11 09:09:01,064 - root - INFO -   Avg val loss=0.4237671494483948
-2025-11-11 09:09:01,064 - root - INFO -   Total validation time: 2.2668607234954834 sec
-2025-11-11 09:09:39,750 - root - INFO - Time taken for epoch 2 is 38.682904 sec, avg 13.235821 samples/sec
-2025-11-11 09:09:39,751 - root - INFO -   Avg train loss=0.392761
-2025-11-11 09:09:43,216 - root - INFO -   Avg val loss=0.37524354457855225
-2025-11-11 09:09:43,216 - root - INFO -   Total validation time: 2.5416245460510254 sec
-2025-11-11 09:10:21,908 - root - INFO - Time taken for epoch 3 is 38.688848 sec, avg 13.233788 samples/sec
-2025-11-11 09:10:21,909 - root - INFO -   Avg train loss=0.356610
-2025-11-11 09:10:25,364 - root - INFO -   Avg val loss=0.3536340296268463
-2025-11-11 09:10:25,364 - root - INFO -   Total validation time: 2.18052077293396 sec
-```
+The script wraps the process in `nsys profile` and writes one report per rank to `LOGDIR`. The name is `PROFILE_OUTPUT` plus the Slurm rank, so this command produces `short.<rank>.nsys-rep`. Copy the report locally and open it in Nsight Systems. The same `ENABLE_PROFILING=1` prefix works on the data-parallel and model-parallel scripts.
 
-We can run the DALI case through profiler using the instructions in the earlier section with the added `--data_loader_config=dali`
-argument and load that profile in Nsight Systems. This is what this profile ([`baseline_dw8_dali.nsys-rep`](sample_nsys_profiles/baseline_dw8_dali.nsys-rep)) looks like and zoomed in to a single iteration:
-![NSYS DALI Zoomed](tutorial_images/nsys_dali_zoomed.png)
+### Loader workers, BF16, compilation, and fused Adam
 
-With DALI, you will see that there are now multiple CUDA stream rows in the timeline view, corresponding to internal streams DALI uses
-to run data augmentation kernels and any memory movement concurrently with the existing PyTorch compute kernels. Stream 13 in this view shows concurrent H2D memory copies of the batch input data, which is an improvement over the native dataloader.
+`short_opt` keeps the PyTorch loader and turns on the single-GPU optimizations together:
 
-### Enabling Mixed Precision Training
-Now that the data loading performance has been improved, we can start focusing on pushing compute performance. As a first step to improve the compute performance of this training script, we can enable automatic mixed precision (AMP) in PyTorch. AMP provides a simple way for users to convert existing FP32 training scripts to mixed FP32/FP16 of FP32/BF16 precision, unlocking
-faster computation with Tensor Cores on NVIDIA GPUs.
+* `num_data_workers: 2` loads batches in side processes. `pin_memory` is already set in the loader, so the host copy uses pinned memory.
+* `amp_mode: bf16` runs eligible ops in BF16 under `torch.autocast`. BF16 keeps the FP32 exponent range, so the loss is used as computed. `amp_mode: fp16` scales the loss through `GradScaler`.
+* `enable_jit: true` wraps the model in `torch.compile`.
+* `enable_fused: true` uses the fused Adam kernel, which applies the update in fewer launches.
 
-The AMP module in torch is composed of two main parts: `torch.cuda.amp.GradScaler` and `torch.cuda.amp.autocast`. `torch.cuda.amp.GradScaler` handles automatic loss scaling to control the range of FP16 gradients when using FP16 precision. Note that since BF16 precision maintains the range of FP32, loss scaling is not required when using AMP with this data type.
-The `torch.cuda.amp.autocast` context manager handles converting model operations to BF16/FP16 where appropriate.
-
-As a quick note, the A100 GPUs we've been using to report results thus far have been able to benefit from Tensor Core compute via the use of TF32 precision operations, enabled by default for CUDNN and CUBLAS in PyTorch. You may measure the benefit of TF32 precision usage on the A100 GPU by temporarily disabling it via setting the environment variable `NVIDIA_TF32_OVERRIDE=0`. We will leave that to you as an exercise. You should see slower performance when TF32 is disabled.
-
-Though TF32 helps, AMP can still provide more performance improvement for A100 GPUs,
-as TF32 is a compute type only, leaving all data in full precision FP32. FP16 precision has the compute benefits of Tensor Cores combined with a reduction in storage and memory bandwidth requirements. 
-
-You can turn on AMP with `--amp_mode=fp16` or `--amp_mode=bf16`. Let's do it for BF16.
-
-We can run this experiment using AMP on Perlmutter by running one of the following commands:
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline_dw8_dali_bf16 sbatch -n 1 -t 20 ./submit_pm.sh --config=short --num_data_workers 8 --data_loader_config=dali --amp_mode=bf16 --run_num=nw8_dali_bf16
+```bash
+sbatch -n 1 ./submit_pm.sh --config=short_opt --run_num=opt
+ENABLE_PROFILING=1 PROFILE_OUTPUT=short_opt sbatch -n 1 ./submit_pm.sh --config=short_opt --run_num=opt_profile
 ```
 
+> **TODO:** throughput for `short_opt`, and the Nsight Systems timeline.
 
-This is the performance with batch size 16, 8 workers, DALI, and AMP BF16:
-```
-2025-11-11 09:08:31,171 - root - INFO - Time taken for epoch 1 is 11.124525 sec, avg 44.586173 samples/sec
-2025-11-11 09:08:31,171 - root - INFO -   Avg train loss=0.601194
-2025-11-11 09:08:33,119 - root - INFO -   Avg val loss=0.44043827056884766
-2025-11-11 09:08:33,120 - root - INFO -   Total validation time: 1.3733339309692383 sec
-2025-11-11 09:08:42,628 - root - INFO - Time taken for epoch 2 is 9.471231 sec, avg 54.058443 samples/sec
-2025-11-11 09:08:42,629 - root - INFO -   Avg train loss=0.402042
-2025-11-11 09:08:44,716 - root - INFO -   Avg val loss=0.38301941752433777
-2025-11-11 09:08:44,717 - root - INFO -   Total validation time: 1.4965760707855225 sec
-2025-11-11 09:08:54,185 - root - INFO - Time taken for epoch 3 is 9.432336 sec, avg 54.281358 samples/sec
-2025-11-11 09:08:54,187 - root - INFO -   Avg train loss=0.364391
-2025-11-11 09:08:56,224 - root - INFO -   Avg val loss=0.3609674572944641
-2025-11-11 09:08:56,225 - root - INFO -   Total validation time: 1.4771175384521484 sec
+### DALI
+
+`short_opt_dali` is `short_opt` with `data_loader_config: dali`. DALI runs its workers in its own runtime and can copy the next batch on a separate CUDA stream while the model runs.
+
+```bash
+sbatch -n 1 ./submit_pm.sh --config=short_opt_dali --run_num=dali
+ENABLE_PROFILING=1 PROFILE_OUTPUT=short_opt_dali sbatch -n 1 ./submit_pm.sh --config=short_opt_dali --run_num=dali_profile
 ```
 
-For this model, we see a massive improvement when using AMP with either FP16 or BF16 precision, improving throughput to over 54 samples/s in each case. BF16 may have a slight edge over FP16 due to the lack of loss scaling.
+> **TODO:** throughput for `short_opt_dali`, and the timeline showing the DALI streams overlapping the training step.
 
-For the saved profile: This is ([`baseline_dw8_dali_bf16.nsys-rep`](sample_nsys_profiles/baseline_dw8_dali_bf16.nsys-rep)) looks like:
-![NSYS DALI AMP](tutorial_images/nsys_dali_bf16_zoomed.png)
+On the GPUs used for the tutorial, FP32 GEMMs already use TF32 tensor-core math. `NVIDIA_TF32_OVERRIDE=0` turns that off if you want a pure FP32 measurement of the baseline.
 
-With AMP enabled, we see that the `forward` (and, correspondingly the backward) time is significantly reduced. The transformer
-architecture we are using relies mainly on GEMM operations that greatly benefit from mixed precision.
+## Data parallelism
 
-### Just-in-time (JIT) compilation via `torch.compile` and fused optimizers
-While AMP provided a large increase in compute speed already, there are a few other optimizations available for PyTorch to improve
-compute throughput. A first (and simple change) is to enable the `fused` option in the Adam optimizer from `torch.optim.Adam`.
-In the past, this fused optimizer was mainly available in
-[APEX](https://github.com/NVIDIA/apex) but has now been made available in PyTorch directly. Enabling the `fused` option results in fewer kernels to perform the weight
-update than the unfused Adam optimizer, reducing latency and making more efficient use of GPU bandwidth by increasing register
-reuse. We can enabled the use of the fused optimizer in our training script by adding the flag `--enable_fused`. 
+`DistributedDataParallel` replicates the model on each GPU and all-reduces gradients during the backward pass. The implementation here uses the NCCL backend and one process per GPU. [`export_DDP_vars.sh`](export_DDP_vars.sh), sourced by the job scripts, publishes `RANK`, `LOCAL_RANK`, and `WORLD_SIZE` from Slurm. [`train.py`](train.py) reads those and calls `torch.distributed.init_process_group`.
 
-In additional to optimizer fusion, for more general fusion of operations in PyTorch, we can enable
-JIT compilation, done in our training script via the flag `--enable_jit`. This option wraps the model in `torch.compile` which
-will compile/fuse eligible operations in the model, further reducing latency.
+Each rank trains on `global_batch_size / world_size` samples. The PyTorch loader uses `DistributedSampler` in [`utils/data_loader.py`](utils/data_loader.py) so ranks see different samples. After the model is built it is wrapped as:
 
-We can enable these by running the following command:
-
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline_dw8_dali_bf16_fused_jit sbatch -n 1 -t 20 ./submit_pm.sh --config=short --num_data_workers 8 --data_loader_config=dali --amp_mode=bf16 --enable_fused --enable_jit --run_num=nw8_dali_bf16_fused_jit
-```
-
-This is the performance with batch size 16, 8 workers, DALI, AMP, fused optimizer and JIT / torch.compile:
-```
-2025-11-11 09:09:25,295 - root - INFO - Time taken for epoch 1 is 41.934996 sec, avg 11.827830 samples/sec
-2025-11-11 09:09:25,296 - root - INFO -   Avg train loss=0.584198
-2025-11-11 09:09:39,185 - root - INFO -   Avg val loss=0.42060598731040955
-2025-11-11 09:09:39,186 - root - INFO -   Total validation time: 13.275460243225098 sec
-2025-11-11 09:09:47,333 - root - INFO - Time taken for epoch 2 is 8.140977 sec, avg 62.891713 samples/sec
-2025-11-11 09:09:47,334 - root - INFO -   Avg train loss=0.389975
-2025-11-11 09:09:49,500 - root - INFO -   Avg val loss=0.374103844165802
-2025-11-11 09:09:49,500 - root - INFO -   Total validation time: 1.5723493099212646 sec
-2025-11-11 09:09:57,669 - root - INFO - Time taken for epoch 3 is 8.001337 sec, avg 63.989305 samples/sec
-2025-11-11 09:09:57,670 - root - INFO -   Avg train loss=0.355320
-2025-11-11 09:09:59,812 - root - INFO -   Avg val loss=0.35250577330589294
-2025-11-11 09:09:59,813 - root - INFO -   Total validation time: 1.576087236404419 sec
-```
-Running a profile ([`baseline_dw8_dali_bf16_fused_jit.nsys-rep`](sample_nsys_profiles/baseline_dw8_dali_bf16_fused_jit.nsys-rep)) using these new options and loading in Nsight Systems looks like this:
-![NSYS DALI AMP APEX JIT](tutorial_images/nsys_dali_bf16_fused_jit_zoomed.png)
-
-
-As the compute cost of this model is mostly dominated by large GEMMs, latency reductions via optimizer and pointwise operation fusion may be less impactful, but they still provide a decent boost in this case.
-
-## Distributed training with data parallelism
-
-Instructions for hands-on with mulit-GPU and multi-node training using distributed data parallelism.
-
-Now that we have model training code that is optimized for training on a single GPU,
-we are ready to utilize multiple GPUs and multiple nodes to accelerate the workflow
-with *distributed training*. We will use the recommended `DistributedDataParallel`
-wrapper in PyTorch with the NCCL backend for optimized communication operations on
-systems with NVIDIA GPUs. Refer to the PyTorch documentation for additional details
-on the distributed package: https://pytorch.org/docs/stable/distributed.html
-
-### Code basics
-
-To submit multi-GPU and multi-node jobs, we can use the same slurm script but specify either
-the number of tasks (GPUs) with `-n <number of tasks>` or `-N <number of nodes`. However for 
-this session we will be using a different, larger compute reservation, so we have copied
-the original submission script to a new one (`submit_pm_dp.sh`) which will use the larger reservation.
-
-To submit a multi-node, multi-GPU job, you could do, e.g.:
-```
-sbatch -N NUM_NODES submit_pm_dp.sh [OPTIONS]
-```
-
-This script automatically uses the slurm flags `--ntasks-per-node 4`, `--cpus-per-task 32`, `--gpus-per-node 4`, so slurm will allocate all the CPUs and GPUs available on each Perlmutter GPU node, and launch one process for each GPU in the job.
-
-*Question: why do you think we run 1 task (cpu process) per GPU, instead of 1 task per node (each running 4 GPUs)?*
-
-PyTorch `DistributedDataParallel`, or DDP for short, is flexible and can initialize process groups with a variety of methods. For this code, we will use the standard approach of initializing via environment variables, which can be easily read from the slurm environment. Take a look at the `export_DDP_vars.sh` helper script, which is used by our job script to expose for PyTorch DDP the global rank and node-local rank of each process, along with the total number of ranks and the address and port to use for network communication. In the [`train.py`](train.py) script, near the bottom in the main script execution, we set up the distributed backend using these environment variables via `torch.distributed.init_process_group`.
-
-When distributing a batch of samples in DDP training, we must make sure each rank gets a properly-sized subset of the full batch.
-*See if you can find where we use the `DistributedSampler` from PyTorch to properly partition the data in [`utils/data_loader.py`](utils/data_loader.py).*
-
-In `train.py`, after our ViT model is constructed,
-we convert it to a distributed data parallel model by wrapping it as:
-```
+```python
 model = DistributedDataParallel(model, device_ids=[local_rank])
 ```
 
-The DistributedDataParallel (DDP) model wrapper takes care of broadcasting
-initial model weights to all workers and performing all-reduce on the gradients
-in the training backward pass to properly synchronize and update the model
-weights in the distributed setting.
+The wrapper broadcasts the initial weights and overlaps gradient communication with the backward pass.
 
-*Question: why does DDP broadcast the initial model weights to all workers? What would happen if it didn't?*
+*Why one process per GPU, rather than one process per node that owns all four GPUs?*
 
-### Scaling and convergence
+*Why does DDP broadcast the initial weights? What would training do if each rank kept its own initialization?*
 
-To speed up training, we try to use larger batch sizes,
-spread across more GPUs, with larger learning rates.
-Our single-GPU base config from the previous section used a batch size of 16.
-So, we will try to keep the local batch size fixed at 16 and scale up the number of GPUs.
-In these experiments, we will make use the of the square-root learning rate scaling rule,
-which multiplies the base initial learning rate by `sqrt(global_batch_size/base_batch_size)`.
-However, the config files will let you set any learning rate you want.
-Feel free to experiment with different values and see what happens.
+The 4-GPU run keeps the optimized ViT from `short_opt_dali` and scales the global batch from 4 to 16, so the local batch stays 4:
 
-*Question: how do you think the loss curves would change if we didn't increase the learning rate at all as we scale up?*
-
-*Question: what do you think would happen if we simply increased our learning rate without increasing batch size?*
-
-Let's first try running on 4 GPUs on a single node, with a global batch size of 64:
-```
-sbatch -N 1 submit_pm_dp.sh --config=bs64_opt
+```bash
+sbatch -N 1 ./submit_pm_dp.sh --config=short_opt_dali_dp --run_num=dp4
 ```
 
-You can also go ahead and submit jobs that will use 4 nodes and 16 nodes, with respective
-batch sizes of 256 and 1024:
-```
-sbatch -N 4 submit_pm_dp.sh --config=bs256_opt
-sbatch -N 16 submit_pm_dp.sh --config=bs1024_opt
-```
+`short_opt_big` is the larger ViT (patch 16, embed 1024) trained with data parallelism on 16 GPUs. The global batch is 16, so each GPU holds one sample:
 
-For example, with BS64 on 4 GPUs, you would see much faster throughput (around 200 samples/s) due to more GPUs:
-```
-2025-11-11 10:32:41,169 - root - INFO - Time taken for epoch 1 is 225.784968 sec, avg 167.805680 samples/sec
-2025-11-11 10:32:41,280 - root - INFO -   Avg train loss=0.308010
-2025-11-11 10:33:12,681 - root - INFO -   Avg val loss=0.25076618790626526
-2025-11-11 10:33:12,682 - root - INFO -   Total validation time: 29.534873485565186 sec
-2025-11-11 10:36:18,508 - root - INFO - Time taken for epoch 2 is 185.819411 sec, avg 204.241310 samples/sec
-2025-11-11 10:36:18,510 - root - INFO -   Avg train loss=0.219615
-2025-11-11 10:36:30,895 - root - INFO -   Avg val loss=0.19705182313919067
-2025-11-11 10:36:30,895 - root - INFO -   Total validation time: 11.696704626083374 sec
-2025-11-11 10:39:38,753 - root - INFO - Time taken for epoch 3 is 187.851625 sec, avg 202.031789 samples/sec
-2025-11-11 10:39:38,755 - root - INFO -   Avg train loss=0.181791
-2025-11-11 10:39:51,162 - root - INFO -   Avg val loss=0.1697038859128952
-2025-11-11 10:39:51,163 - root - INFO -   Total validation time: 11.6270751953125 sec
+```bash
+sbatch -N 4 ./submit_pm_dp.sh --config=short_opt_big --run_num=dp16
 ```
 
-and if you use 16 nodes (64 GPUs) with BS1024, you would see:
-```
-2025-11-11 10:54:32,122 - root - INFO - Time taken for epoch 1 is 56.093554 sec, avg 657.187814 samples/sec
-2025-11-11 10:54:32,122 - root - INFO -   Avg train loss=0.698029
-2025-11-11 10:54:51,569 - root - INFO -   Avg val loss=0.5566979646682739
-2025-11-11 10:54:51,570 - root - INFO -   Total validation time: 18.72025752067566 sec
-2025-11-11 10:55:06,301 - root - INFO - Time taken for epoch 2 is 14.726653 sec, avg 2572.750220 samples/sec
-2025-11-11 10:55:06,302 - root - INFO -   Avg train loss=0.485387
-2025-11-11 10:55:07,440 - root - INFO -   Avg val loss=0.4250652492046356
-2025-11-11 10:55:07,440 - root - INFO -   Total validation time: 0.455810546875 sec
-2025-11-11 10:55:22,333 - root - INFO - Time taken for epoch 3 is 14.889114 sec, avg 2544.677920 samples/sec
-2025-11-11 10:55:22,334 - root - INFO -   Avg train loss=0.398981
-2025-11-11 10:55:23,500 - root - INFO -   Avg val loss=0.3754423260688782
-2025-11-11 10:55:23,501 - root - INFO -   Total validation time: 0.5062005519866943 sec
-```
+The learning rate is the `lr` value in the YAML file. Edit it in a copied config to try a larger rate with a larger batch.
 
+*If the learning rate stays fixed while the global batch grows, what do you expect to happen to the loss curve?*
 
-Look at your new logs in Tensorboard. Compare the speed of training across runs,
-as well as the loss and RMSE metrics. You can toggle the horizontol axis to show relative time
-to view timing differences.
+*Which of these runs finishes a fixed number of samples in the least time, and which uses the least GPU-time?*
 
-You can also use our example saved logs and download them from [our SC25 tensorboard logs](https://portal.nersc.gov/project/dasrepo/sc25_logs/)
+Compare the runs in TensorBoard. The event files live under `LOGDIR/<config>/<N>GPU/<run_num>/logs/`. Switching the horizontal axis to relative time makes the throughput difference visible.
 
-Quick questions:
+> **TODO:** samples/sec for `short_opt_dali_dp` and `short_opt_big`, and the validation-RMSE comparison against relative time.
 
-- *As you scale up to more GPUs and larger batch sizes, what speedups do you observe in
-  the rate of samples processed? How about in the rate of convergence?*
-- *Which config is fastest? Which one is most cost efficient (in terms of total GPU time)?*
-- *Try to add a new config with a new batch size and/or an adjusted learning rate.
-  Try to predict the outcome. If you run it, do you see what you expect?
-  Can you invent a config which overfits, or one which diverges?*
+Profile the 4-GPU run the same way as the single-GPU jobs. In the timeline, find the gradient all-reduces and see whether they overlap the backward compute:
 
-Here is a screenshot of tensorboard showing the RMSE vs relative time for the suggested configs.
-![data_parallel_timings](tutorial_images/dp_timings.png)
-
-You can also profile the data parallel jobs similar to the single GPU profiling section above. You can use the `bs64_opt_short` config for this to limit the number of samples (else the profile will be too large). For example, you can run:
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=dp_bs64 sbatch -N 1 submit_pm_dp.sh --config=bs64_opt_short --run_num=profile
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=dp4 sbatch -N 1 ./submit_pm_dp.sh --config=short_opt_dali_dp --run_num=dp4_profile
 ```
 
-See if you can spot where the weight gradients are synced in the profile. Also, note if it's happening at the same time as any compute. 
+> **TODO:** Nsight Systems timeline for the 4-GPU run, zoomed to the gradient synchronization.
 
-Here's an example zoomed in profile for BS64 (by default the profile will happen only on a single rank but you can save profiles from all ranks as well to look at the difference among different ranks). You can also use our example saved profile [dp_bs64.nsys-rep](sample_nsys_profiles/dp_bs64.nsys-rep) to view the profile.
-
-![NSYS DP BS64](tutorial_images/nsys_dp.png)
-
-You can play with the `bucket_cap_mb` parameter to see how it affects the profile. Smaller values will have smaller bucket sizes for the all-reduce and hence you should see more frequent syncs. For example, you can run:
-
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=dp_bs64_bcap2 sbatch -N 1 submit_pm_dp.sh --config=bs64_opt_short --bucket_cap_mb=5 --run_num=profile_bcap2
-```
-
-and take a look at the profile [dp_bs64_bcap2.nsys-rep](sample_nsys_profiles/dp_bs64_bcap2.nsys-rep). You should see more frequent syncs.
-
-Quick questions:
-- *What if you did not use DDP and directly called `torch.distributed.all_reduce` before the optimizer step to sync gradients? What would you expect to see in the profile?*
-
+*If the code called `all_reduce` on the gradients once, after the backward pass, instead of using DDP, what would that timeline look like?*
 
 ## Model parallelism
 
-Now that we are familiar with distributed data parallel training, we are ready to move to more advanced parallelism in the form of model parallelism. One of the main motivations to explore this dimension is the need to use a larger model and/or process higher resolution images: both these can lead to higher accuracies and/or better emulation of physical phenomena. However, they will inflate the memory consumption (activation and weights) as well as computational cost.  At some point, the model (activation and weights) will no longer fit on a single GPU and we need to partition/shard the model across multiple GPUs.
+Data parallelism replicates the whole model and the whole image on every GPU. A wider network, or the same network on this 4096 × 4096 grid with smaller patches, stores more activations than one GPU holds. Model parallelism splits that state. The ViT in [`networks/vit_mp.py`](networks/vit_mp.py) is the worked example; the other networks call the same primitives.
 
-We will increase our model size to motivate this partition and show you the building blocks of implementing model parallelism, motivated by Megatron-style model parallelism. We will focus mostly on tensor parallelism here, while also supporting two spatial mesh dimensions, `sp1` and `sp2`. For ViT, the flattened token sequence is sharded over the combined `sp1-sp2` group, using the communication pattern commonly called [context parallelism](https://docs.nvidia.com/megatron-core/developer-guide/latest/api-guide/context_parallel.html). Future 2D models can also communicate independently along either spatial axis. Our goal is not to build the most efficient model parallel network but to provide an instructive blueprint for parallelizing scientific models in PyTorch.
+### Communicator groups
 
+Treat the allocation as an `M × D` grid. `D` GPUs replicate the model, as in the data-parallel section, and `M` GPUs split one replica. [`utils/comm.py`](utils/comm.py) factors `M` further, into tensor parallelism and two spatial axes:
 
-### Setting up the communicator groups
-
-We typically assume a `MxD` grid of GPUs where we use data parallelism (as before) across D GPUs and split the model across `M` GPUs. Take a look at [`utils/comm.py`](utils/comm.py) where this is setup. The logic is more general where we could split the `M` GPUs into more orthogonal groups (example: `M = M_1 x M_2`) for parallelism on more dimensions.
-
-Our mesh dimensions are `dp` for data parallelism, `tp` for tensor parallelism, and `sp1`/`sp2` for the two spatial axes. Thus, `total GPUs = dp x tp x sp1 x sp2`. Together, `tp`, `sp1`, and `sp2` form the model-parallel group, while `dp` is orthogonal. ViT flattens the `sp1 x sp2` spatial mesh into one context-parallel group; models with native 2D layouts can use the axes independently.
-
- 
-Here's a quick example: Let's say we have 8 GPUs in total and we want to do 4-way tensor parallelism `tp` and 2-way data parallelism `dp`. The logic would simply have the `tp` group (each has 4 GPUs) ranks as `[0, 1, 2, 3], [4, 5, 6, 7]` and `dp` in the orthogonal dimension (each has 2 GPUs) as: `[0, 4], [1, 5], [2, 6], [3, 7]`. So, let's say, we are looking at what work rank `5` is doing -- then, all `tp` communications will happen within the group `[4, 5, 6, 7]` and `dp` gradient reduction across `[1, 5]`.  For this communication, we tell `torch.distributed` about the groups by creating them with `torch.distributed.new_group(ranks = grp)` and for any communication collectives such as `torch.distributed.all_reduce`, we simply pass the group to the [function call](https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_reduce).
-
-Take a look at ['utils/check_rank_generator.ipynb'](utils/check_rank_generator.ipynb) to play around with this communicator group generator. Try assigning different numbers of GPUs to each parallelization group. The `order` parameter controls rank assignment. For example, `tp-sp1-sp2-dp` keeps `tp` ranks closest, followed by the two spatial dimensions and then `dp`. Nearby ranks will usually be on the same node and can use fast links such as NVLink.
-
-Another thing to note is that we need to only use the `dp` groups for the data loading purposes -- this means that the data for each model parallel group (e.g. `[4, 5, 6, 7]`) should be the same. This is taken care of in [`train_mp.py`](train_mp.py) with the lines:
-
+```text
+world size = dp × tp × sp1 × sp2
 ```
+
+`dp` is orthogonal to the model-parallel axes. The ViT folds `sp1 × sp2` into one context-parallel group, `sp1-sp2`. Swin, the FNO, and ConvNeXt keep `sp1` and `sp2` as separate spatial axes.
+
+`comm.init` asks [`utils/rank_generator.py`](utils/rank_generator.py) for the rank list of each group, then registers that list with `torch.distributed.new_group`. A collective takes the group it should run on:
+
+```python
+torch.distributed.all_reduce(tensor, group=comm.get_group("tp"))
+```
+
+Ranks absent from a list are not members of that group. `comm.get_group`, `comm.get_rank`, and `comm.get_size` are the lookups the layers use.
+
+`order` chooses which index varies fastest. The default `tp-sp1-sp2-dp` makes tensor-parallel ranks a contiguous block, so they share a node. [`utils/check_rank_generator.ipynb`](utils/check_rank_generator.ipynb) prints the lists for any mesh.
+
+Eight GPUs with `tp=4` and `dp=2` give tensor-parallel groups `[0, 1, 2, 3]` and `[4, 5, 6, 7]`, and data-parallel groups `[0, 4]`, `[1, 5]`, `[2, 6]`, `[3, 7]`. Rank 5 exchanges activations inside `[4, 5, 6, 7]` and reduces data-parallel gradients with rank 1.
+
+Only `dp` changes which sample a rank reads. [`train_mp.py`](train_mp.py) sizes the loader from that group, so a model-parallel group trains on one example and each rank keeps its piece of it:
+
+```python
 params.data_num_shards = comm.get_size("dp")
 params.data_shard_id = comm.get_rank("dp")
 ```
-`get_rank()` and `get_size()` are only within the data parallel group.  
 
-### Setting up the model parallel utilities
+### Autograd mappings
 
-Now that the groups are set up, PyTorch must communicate local results within
-them. The complete model-parallel ViT, including its column- and row-parallel
-linear layers, is implemented in
-[`networks/vit_mp.py`](networks/vit_mp.py). Row-parallel layers call
-`allreduce_forward_identity_backward()` to sum partial outputs, while
-column-parallel layers use `identity_forward_allreduce_backward()`. Their
-paired custom `autograd.Function` mappings are implemented in
-[`distributed/mappings.py`](distributed/mappings.py). Gather/split and
-gather/reduce-scatter mappings handle ViT sequence sharding over the `sp1`
-group.
+A layer that communicated in the forward has to communicate the matching quantity in the backward. PyTorch will not infer that pair. Each one is a `torch.autograd.Function` in [`distributed/mappings.py`](distributed/mappings.py): `forward` runs one collective, `backward` runs its adjoint. The modules call the wrappers (`identity_forward_allreduce_backward`, and the others below) rather than `all_reduce` directly, so both directions stay defined.
 
-### Testing model parallel code (optional)
+The ViT MLP is the Megatron split, as `ColumnParallelLinear` and `RowParallelLinear`.
 
-We highly recommend that whenever you are writing any model parallel code, you write some quick unit tests to verify that the distributed version of the model gives the same results for the forward and backward passes as the non-distributed version. This is a good way to catch bugs early and ensure that the distributed version is correct.
+A column-parallel layer stores a slice of the output features and sees the full input. The matmul is local, so the forward collective is an identity. On the way back, each rank holds only a partial input-gradient, and the full gradient is their sum. The layer calls `identity_forward_allreduce_backward(x, "tp")` on its input. Attention uses the same layer for the query, key, and value projections, which also splits the heads across `tp`.
 
-We have implemented a quick example that loads an MLP and tests this in [tests/make_mlp_tensor_par.py](tests/make_mlp_tensor_par.py).  Here, you will find `MLP` and `DistributedMLP`. The `DistributedMLP` is supposed to be the tensor parallel version of the `MLP` model. However, we have not implemented it yet and hence the test will fail. 
+A row-parallel layer stores a slice of the input features. Each matmul is a partial output and the real output is the sum, so the forward ends in `allreduce_forward_identity_backward(x, "tp")`. The output-gradient arriving in the backward is already complete, and that pass stays local. The attention projection and the second MLP matrix are row-parallel.
 
-Let's try to fix it. First, let's request an interactive node to test the code by doing the following:
+Sequence sharding is the same pattern on the token axis. Attention leaves the query on the local tokens and gathers keys and values over `sp1-sp2` with `allgather_forward_reducescatter_backward`. The backward reduce-scatters the key and value gradients onto the tokens that owned them. `allgather_forward_split_backward` and `split_forward_allgather_backward` are the gather/split pair for a tensor that is cut without a reduction.
 
-```
-salloc --nodes 1 --qos interactive -t 30 -C gpu -A ntrain5 --reservation=sc25_dl_tutorial_2
-```
+The other networks call the same kind of function. The FNO's FFT uses `distributed_transpose`: an all-to-all that swaps which axis is sharded, with the inverse transpose in the backward. ConvNeXt uses `halo_forward_sum_backward`, which copies neighbor edges in and, on the way back, returns the halo gradients to the rank that owns those cells. Swin's window shift uses `roll_forward_reverseroll_backward`.
 
-This will place you on a compute node with 4 GPUs. This is your test space where you can try things out using up to 4 GPUs. Try running the test with:
+A parameter that is a slice or a copy across a group carries `comm_metadata`. `init_ddp_model_and_reduction_hooks` in the same file reads it when the model is wrapped in DDP, and adds an all-reduce for any weight gradient the local backward has not already summed. A column-parallel weight, updated from this rank's tokens and copied across the spatial group, is marked:
 
-```
-bash tests/run_example.sh 4
-```
-
-This will use 4 GPUs and try to run both the single and distributed MLP models on a dummy input and check if they have the same forward pass output and backward pass input gradients. Currently it will fail.
-
-*Excercise: Fill in the missing implementation details in `DistributedMLP`. You need to split the weights and take care of the syncs. If the implementation is correct, the errors should be small*
-
-Additionally, if you implement it correctly, you should see the model info showing you that the weights are split as below:
-
-```
-model:
-MLP(
-  (fc1): Linear(in_features=1024, out_features=4096, bias=False)
-  (act): GELU(approximate='none')
-  (fc2): Linear(in_features=4096, out_features=1024, bias=False)
-)
-model_distributed:
-DistributedMLP(
-  (fc1): Linear(in_features=1024, out_features=1024, bias=False)
-  (act): GELU(approximate='none')
-  (fc2): Linear(in_features=1024, out_features=1024, bias=False)
-)
-```
-
-Note that the distributed model's out_features is 1/4th of the original model's out_features when you use 4 GPUs.
-
-
-### Running the model parallel code
-
-The train script for model-parallel training is at [`train_mp.py`](train_mp.py). The model-parallel size is `tp x sp1 x sp2`. Let's first focus on tensor parallelism. Setting `--tp=4` enables four-way tensor parallelism. The `mp` configuration increases `embed_dim` to `1024` and uses a global batch size of `64`. First, run with no model parallelism:
-
-```
-sbatch --nodes=1 submit_pm_mp.sh --config=mp --tp=1 --sp1=1 --sp2=1 --run_num=tp1sp1
-```
-
-If this job runs on 40G GPUs on Perlmutter, we can see from the logs that the job crashes with an OOM signal because the model is too big:
-
-```
-[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 508.00 MiB. GPU 0 has a total capacity of 39.38 GiB of which 478.12 MiB is free. Including non-PyTorch memory, this process has 38.89 GiB memory in use. Of the allocated memory 32.00 GiB is allocated by PyTorch, and 333.01 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
-```
-
-If we run it on an 80G GPU, we can see the estimated memory usage to be around 45GB and hence just overflows the 40G GPU. While this example is instructive, larger models (and/or larger inputs) can push the memory consumption significantly higher.
-
-
-Let's run it with `--tp=4`, which shards the hidden dimensions of the MLP weights and biases as well as the attention heads.
-
-Note here that 4 GPUs are used for model parallelism. Recall our global batch size is `64`. How many GPUs do we need? We also want 4-way data parallel, in addition to model parallelism, here: therefore, we should run on 16 GPUs (or 4 nodes on Perlmutter). Remember that we are assuming `tp x dp` GPUs always. Run this config with the command:
-
-```
-sbatch --nodes=4 submit_pm_mp.sh --config=mp --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1
-```
-
-```
-2025-11-11 17:48:32,573 - root - INFO -  Memory usage after forward pass: 28.6424560546875 GB.
-2025-11-11 17:53:31,612 - root - INFO - Time taken for epoch 1 is 301.890294 sec, avg 125.502544 samples/sec
-2025-11-11 17:53:31,614 - root - INFO -   Avg train loss=0.331208
-2025-11-11 17:53:43,511 - root - INFO -   Avg val loss=0.24403679370880127
-2025-11-11 17:53:43,512 - root - INFO -   Total validation time: 10.686778783798218 sec
-2025-11-11 17:53:44,073 - root - INFO -  Memory usage after forward pass: 29.2655029296875 GB.
-2025-11-11 17:58:43,811 - root - INFO - Time taken for epoch 2 is 300.292863 sec, avg 126.383290 samples/sec
-2025-11-11 17:58:44,031 - root - INFO -   Avg train loss=0.204494
-2025-11-11 17:58:55,053 - root - INFO -   Avg val loss=0.17499171197414398
-2025-11-11 17:58:55,054 - root - INFO -   Total validation time: 10.495761156082153 sec
-2025-11-11 17:58:55,648 - root - INFO -  Memory usage after forward pass: 29.2655029296875 GB.
-2025-11-11 18:03:55,354 - root - INFO - Time taken for epoch 3 is 300.250531 sec, avg 126.401109 samples/sec
-2025-11-11 18:03:55,356 - root - INFO -   Avg train loss=0.159383
-2025-11-11 18:04:06,428 - root - INFO -   Avg val loss=0.15165293216705322
-2025-11-11 18:04:06,428 - root - INFO -   Total validation time: 9.85232949256897 sec
-2025-11-11 18:04:07,252 - root - INFO -  Memory usage after forward pass: 29.2655029296875 GB.
-```
-
-  
-
-We see that the memory has reduced to 29G. Also note that the throughput is higher.
-
-  
-
-We also see that the bigger model gets a better RMSE compared to the batch size `64` run from before (with the smaller model), which is the main reason to use bigger models:
-
-![model parallel logs](tutorial_images/mp_comp.png)
-
-You can also profile the model parallel code the same way as before. You can use the config `mp_short` to limit the samples (else your profile will be too large). For example, try running:
-
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=mp_tp4 sbatch --nodes=4 submit_pm_mp.sh --config=mp_short --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1_profile
-```
-
-You will see something like this if you zoomed into the NCCL sections of the profile [mp_tp4.nsys-rep](sample_nsys_profiles/mp_tp4.nsys-rep).
-
-![NSYS MP TP4](tutorial_images/nsys_mp_tp4.png)
-
-As you can see, there are far more frequent NCCL calls in both the forward and backward passes now as we have partitioned the weights across the TP GPUs. In the forward pass, these are all-reduce syncs of the activation maps and similarly in the backward pass. Additionally, the backward pass also has NCCL calls to sync the weight gradients (managed by DDP). We can see both these NCCL calls in the profile.
-
-You can try out similar data parallel scaling configs for this model as well. Here's an example screenshot for three different global batch sizes:
-
-![model and data parallel](tutorial_images/mp_dp_comp.png)
-
-  
-*Question: Can we drop the memory consumed more? What tensors have we left un-partitioned?*
-
-### Using Transformer Engine for faster model parallelism
-If your model is a vanilla transformer that mirrors a language model (so, the transformer ingests a 1D sequence of tokens), then you can use [Transformer Engine (TE)](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/index.html), an optimized library from NVIDIA that implements highly efficient transformer operations (linear layers, attention layers, etc.) along with tensor and context parallelism that are optimized for the least communication overhead. 
-
-In our example, the ViT flattens the input into a 1D sequence of tokens. Hence, the Transformer Engine can be directly used to implement the model parallelism with minimal code changes. However, note that if your model does not fit into standard LLM training patterns, then you might need significant changes and might be unable to use TE (the above custom model parallelism is still valid and can be used whenever custom implementations are needed).
-
-TE layers have simple usage patterns. For example, to make the linear layer tensor parallel, you would use the following call:
-
-```
-self.fc1 = te.Linear(
-            in_features,
-            hidden_features,
-            bias=True,
-            sequence_parallel=False,
-            tp_group=comm.get_group("tp"),
-            tp_size=comm.get_size("tp"),
-            parallel_mode="column",
-            device=torch.cuda.current_device(),
-        )
-```
-
-You have to pass the TP group and tell TE whether to shard the columns or rows for weights. TE will automatically take care of sharding and the syncs as well as fuse necessary operations. See the full function signature [here](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/pytorch.html#transformer_engine.pytorch.Linear).
-
-Similarly for self-attention, you can TE's self-attention module. See [our implementation here](networks/vit_te.py#L100-L151). Take a look at the parameters passed to self-attention: recall that it is the heads that is split across the TP GPUs for self-attention. The function signature is [here](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/pytorch.html#transformer_engine.pytorch.DotProductAttention).
-
-You can turn on TE by using the config `mp_te`. For example, try running:
-
-```
-sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1
-```
-
-This will run TP=4 with the TE model. You should see the following log:
-
-```
-2025-11-11 17:55:09,329 - root - INFO -  Memory usage after forward pass: 20.7127685546875 GB.
-2025-11-11 17:59:09,742 - root - INFO - Time taken for epoch 1 is 244.082555 sec, avg 155.226169 samples/sec
-2025-11-11 17:59:09,743 - root - INFO -   Avg train loss=0.330288
-2025-11-11 17:59:21,811 - root - INFO -   Avg val loss=0.24456655979156494
-2025-11-11 17:59:21,812 - root - INFO -   Total validation time: 11.23072862625122 sec
-2025-11-11 17:59:22,505 - root - INFO -  Memory usage after forward pass: 21.3358154296875 GB.
-2025-11-11 18:03:23,454 - root - INFO - Time taken for epoch 2 is 241.637290 sec, avg 157.061851 samples/sec
-2025-11-11 18:03:23,456 - root - INFO -   Avg train loss=0.205363
-2025-11-11 18:03:34,967 - root - INFO -   Avg val loss=0.17549239099025726
-2025-11-11 18:03:34,967 - root - INFO -   Total validation time: 10.86473035812378 sec
-2025-11-11 18:03:35,798 - root - INFO -  Memory usage after forward pass: 21.3358154296875 GB.
-2025-11-11 18:07:37,000 - root - INFO - Time taken for epoch 3 is 242.024709 sec, avg 156.810436 samples/sec
-2025-11-11 18:07:37,025 - root - INFO -   Avg train loss=0.160089
-2025-11-11 18:07:48,470 - root - INFO -   Avg val loss=0.1493777632713318
-2025-11-11 18:07:48,471 - root - INFO -   Total validation time: 10.796507358551025 sec
-2025-11-11 18:07:49,350 - root - INFO -  Memory usage after forward pass: 21.3358154296875 GB.
-```
-
-TE's TP is faster and more memory efficient. 
-
-
-You can profile this as well. For example, try running:
-
-```
-ENABLE_PROFILING=1 PROFILE_OUTPUT=mp_te_tp4 sbatch --nodes=4 submit_pm_mp.sh --config=mp_te_short --tp=4 --sp1=1 --sp2=1 --run_num=tp4sp1_profile
-```
-
-You should see something like this if you zoomed into the NCCL sections of the profile [mp_te_tp4.nsys-rep](sample_nsys_profiles/mp_te_tp4.nsys-rep).
-
-![NSYS MP TE TP4](tutorial_images/nsys_mp_te_tp4.png)
-
-You will see the same kind of NCCL calls, except with more automatic annotations that TE inserts. For example, above we have zoomed into the MLP section that requires a sync. You can see the first linear layer without any syncs and calling an optimized linear CUDA kernel and the second layer containing the all-reduce sync after the linear layer.
-
-#### More advanced material with spatial parallelism (optional)
-For high-resolution images, it can be beneficial to shard spatial dimensions. ViT flattens its patches into one sequence, so it treats the combined `sp1-sp2` group as transformer context parallelism. Attention over this group requires additional all-gather and reduce-scatter operations. Try running:
-
-```
-sbatch --nodes=4 submit_pm_mp.sh --config=mp --tp=1 --sp1=4 --sp2=1 --order=sp1-tp-sp2-dp --run_num=tp1sp4
-```
-
-Now all spatial-parallel GPUs shard the flattened sequence over `sp1-sp2`. The weights are shared across that combined spatial group.
-
-*Question: If weights are shared across any model parallel GPUs, what considerations should we keep in mind?*
-  
- For shared weights, be careful that the weights are properly initialized and if they need additional reductions, then they are implemented through DDP comm hooks.  
-To keep track of sharded, shared, and additionally reduced parameters, every
-trainable distributed-model parameter has `comm_metadata`, for example:
-
-```
+```python
 self.weight.comm_metadata = {
     "sharded": ["tp", None],
     "shared": ["sp1-sp2"],
     "reduce": ["sp1-sp2"],
 }
 ```
-Shared weights need identical initialization. If input activation gradients are spatially sharded, their weight gradients need an additional all-reduce over `sp1-sp2`; the DDP communication hooks implement this reduction.
 
-With `sp1 x sp2 = 4`, you will see:
+`sharded` is the axis of the slice, `shared` is a group holding an identical copy, and `reduce` is that extra all-reduce.
 
-```
-2025-11-11 17:50:06,957 - root - INFO -  Memory usage after forward pass: 24.1405029296875 GB.
-2025-11-11 17:53:54,467 - root - INFO - Time taken for epoch 1 is 230.433076 sec, avg 164.420840 samples/sec
-2025-11-11 17:53:54,468 - root - INFO -   Avg train loss=0.330428
-2025-11-11 17:54:06,106 - root - INFO -   Avg val loss=0.24635052680969238
-2025-11-11 17:54:06,107 - root - INFO -   Total validation time: 10.530627012252808 sec
-2025-11-11 17:54:06,655 - root - INFO -  Memory usage after forward pass: 26.6229248046875 GB.
-2025-11-11 17:57:54,866 - root - INFO - Time taken for epoch 2 is 228.752209 sec, avg 165.908780 samples/sec
-2025-11-11 17:57:54,868 - root - INFO -   Avg train loss=0.204775
-2025-11-11 17:58:05,856 - root - INFO -   Avg val loss=0.17873653769493103
-2025-11-11 17:58:05,857 - root - INFO -   Total validation time: 10.345210790634155 sec
-2025-11-11 17:58:06,419 - root - INFO -  Memory usage after forward pass: 26.6229248046875 GB.
-2025-11-11 18:01:55,113 - root - INFO - Time taken for epoch 3 is 229.243580 sec, avg 165.553164 samples/sec
+### Running the large ViT
+
+`short_mp` is the embed-1536, depth-16, patch-16 ViT, with global batch 4. The suggested mesh puts 4 GPUs on the sequence (`sp1=4`) and 4 on the batch (`dp=4`), which is 16 GPUs:
+
+```bash
+sbatch --nodes=4 ./submit_pm_mp.sh --config=short_mp --tp=1 --sp1=4 --sp2=1 --run_num=sp4
 ```
 
-*Question: Why is spatial parallelism faster than TP in this case?*
+The same config with the split moved onto tensor parallelism:
 
-**Note:** Choosing data, tensor, and spatial degrees and their rank order requires understanding both model communication and hardware topology. Engineers typically use performance models to identify good layouts. See [performance models for transformers in science](https://arxiv.org/abs/2410.00273) for more detail.
-
-You can also run the combined spatial group with the TE model using `mp_te`:
-```
-sbatch --nodes=4 submit_pm_mp.sh --config=mp_te --tp=1 --sp1=4 --sp2=1 --order=sp1-tp-sp2-dp --run_num=tp1sp4
+```bash
+sbatch --nodes=4 ./submit_pm_mp.sh --config=short_mp --tp=4 --sp1=1 --sp2=1 --run_num=tp4
 ```
 
-**Note:** TE calls this operation context parallelism and expects local sequence lengths to be even and equal. With `sp1 x sp2 = 4`, our sequence length `(360 / 8) * (720 / 8) = 4050` splits unevenly, so [`vit_te.py`](networks/vit_te.py) pads local sequences before calling TE. This adds some compute.
+`order=tp-sp1-sp2-dp` is the default. For a spatial-heavy mesh, `--order=sp1-tp-sp2-dp` keeps the spatial ranks adjacent.
 
+> **TODO:** memory after the forward pass, and samples/sec, for `sp4` and `tp4`.
 
-### Using CUDA Graphs (optional)
-In this repository, we have included an alternative training script [train_mp_graphs.py](train_mp_graphs.py) that illustrates applying
-PyTorch's new CUDA Graphs functionality to the existing model and training loop. CUDA graphs are useful when trying to minimize
-the overhead from launching kernels on the CPU. They can be useful in large scale runs when we have
-orthogonal communicators (as here for model parallelism) to avoid jitter from the CPU as well as cases where CPU latency becomes an 
-important factor (e.g. models with many small kernel launches). Compare [train_mp.py](train_mp.py) and [train_mp_graphs.py](train_mp_graphs.py) to see
-how to use CUDA Graphs in PyTorch.
+> **TODO:** Nsight Systems timeline for `sp4`, zoomed to the activation collectives in forward and backward, and the DDP gradient buckets.
+
+*Which activations does `sp1=4` leave replicated on every rank? Which weights does `tp=4` leave replicated?*
+
+### Transformer Engine
+
+The ViT is a stack of attention and MLP blocks on a 1D token sequence, so the same mesh can be built from [Transformer Engine](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/index.html) layers. `short_mp_te` sets `model_backend: transformer-engine`. [`networks/vit_te.py`](networks/vit_te.py) passes the tensor-parallel group into `te.Linear` and `te.DotProductAttention`; TE shards the weights and inserts the collectives. Swin, FNO, and ConvNeXt keep the custom modules above, which implement the collectives those layouts use.
+
+```bash
+sbatch --nodes=4 ./submit_pm_mp.sh --config=short_mp_te --tp=1 --sp1=4 --sp2=1 --run_num=sp4_te
+```
+
+TE's context parallelism expects the local sequence lengths to be even. [`networks/vit_te.py`](networks/vit_te.py) pads a local sequence when the `sp1 × sp2` split does not already satisfy that.
+
+> **TODO:** memory and samples/sec for `short_mp_te` next to the native `short_mp` run.
+
+> **TODO:** Nsight Systems timeline for the Transformer Engine run, with the TE NVTX ranges visible around one MLP or attention block.
+
+### CUDA graphs
+
+[`train_mp_graphs.py`](train_mp_graphs.py) is the same model-parallel loop with the step captured in a CUDA graph. Graphs remove the CPU launch overhead between kernels, which shows up when a step is many small launches or when several communicators have to stay in step. [`submit_pm_mp.sh`](submit_pm_mp.sh) calls [`train_mp.py`](train_mp.py). Compare the two training scripts to see where the graph is captured and replayed.
+
+> **TODO:** timeline comparing `train_mp.py` and `train_mp_graphs.py` on the same mesh.
