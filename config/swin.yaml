@@ -2,10 +2,10 @@ base: &base
 
   # Model config
   network: 'swin'
-  embed_dim: 384
+  embed_dim: 512
   depth: 12
   dropout: 0.0
-  patch_size: 64
+  patch_size: 32
   window_size: [16, 16]
   num_heads: 16
   model_backend: 'pytorch'
@@ -39,18 +39,67 @@ base: &base
   wireup_info: env
   wireup_store: tcp
 
+# Same sample budget, batch, embed_dim, and depth as the ViT short ladder.
+# Window 16 divides the 128x128 patch grid from patch_size 32.
 short: &short_ls
   <<: *base
-  limit_nsamples: 512
-  limit_nsamples_val: 128
-  num_iters: 128
+  global_batch_size: 4
+  limit_nsamples: 64
+  limit_nsamples_val: 16
+  num_iters: 80
 
 short_opt:
   <<: *short_ls
-  data_loader_config: 'dali'
-  num_data_workers: 8
-  amp_mode: fp16
+  data_loader_config: 'pytorch'
+  num_data_workers: 4
+  amp_mode: bf16
   enable_jit: true
+  enable_fused: true
+
+short_opt_dali: &short_opt_dali
+  <<: *short_ls
+  data_loader_config: 'dali'
+  num_data_workers: 4
+  amp_mode: bf16
+  enable_jit: true
+  enable_fused: true
+
+# 4 GPUs, local batch stays 4. Learning rate stays 5e-4.
+short_opt_dali_dp:
+  <<: *short_opt_dali
+  global_batch_size: 16
+
+# Same size-up as the ViT: patch 16, embed_dim 1024, depth stays 12.
+# Window 16 divides the 256x256 grid. Local batch 1 on 4 GPUs.
+short_opt_big: &short_opt_big
+  <<: *short_ls
+  global_batch_size: 4
+  data_loader_config: 'dali'
+  num_data_workers: 2
+  amp_mode: bf16
+  enable_jit: true
+  enable_fused: true
+  patch_size: 16
+  embed_dim: 1024
+
+# lr = 5e-4 * sqrt(16 / 4) = 1e-3. Local batch stays 1 on 16 GPUs.
+short_opt_big_dp16:
+  <<: *short_opt_big
+  global_batch_size: 16
+  lr: 1.0E-3
+
+# patch 16 -> 256x256 grid. Window 16 divides 256, and with sp1=4 the local
+# grid is 64x256, which 16 also divides.
+short_mp: &short_mp
+  <<: *short_opt_big
+  global_batch_size: 4
+  num_data_workers: 2
+  patch_size: 16
+  embed_dim: 1536
+  depth: 16
+  data_loader_config: 'dali'
+  amp_mode: bf16
+  enable_jit: false
   enable_fused: true
 
 opt: &opt

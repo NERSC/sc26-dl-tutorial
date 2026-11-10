@@ -146,7 +146,7 @@ One GPU, before adding any more.
 - Turn on workers, BF16, fused Adam, and `torch.compile` together.
 - Move the loader to DALI.
 
-[ViT](docs/vit/single-gpu.md) · Swin · FNO · ConvNeXt
+[ViT](docs/vit/single-gpu.md) · [Swin](docs/swin/single-gpu.md) · FNO · ConvNeXt
 
 ### 2. Scale with data parallelism until the local batch is 1
 
@@ -156,7 +156,7 @@ More GPUs, each still holding a full copy of the model.
 - Drop the local batch to 1 as the model gets larger.
 - Raise the learning rate with the global batch.
 
-[ViT](docs/vit/data-parallel.md) · Swin · FNO · ConvNeXt
+[ViT](docs/vit/data-parallel.md) · [Swin](docs/swin/data-parallel.md) · FNO · ConvNeXt
 
 ### 3. Scale with model parallelism
 
@@ -165,4 +165,4 @@ Larger models and inputs, once a local batch of 1 will not fit on the GPU.
 - Split one replica across GPUs, with tensor parallelism and spatial parallelism.
 - Shard the sequence so the step fits again.
 
-[ViT](docs/vit/model-parallel.md) · Swin · FNO · ConvNeXt
+[ViT](docs/vit/model-parallel.md) · [Swin](docs/swin/model-parallel.md) · FNO · ConvNeXt

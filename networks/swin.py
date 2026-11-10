@@ -223,21 +223,24 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        shortcut = x
-        x = self.norm1(x)
-        if any(self.shift_size):
-            x = torch.roll(
-                x,
-                shifts=tuple(-shift for shift in self.shift_size),
-                dims=(1, 2),
-            )
-        x = window_partition(x, self.window_size)
-        x = self.attn(x, self.attn_mask)
-        x = window_reverse(x, self.window_size, self.feature_size)
-        if any(self.shift_size):
-            x = torch.roll(x, shifts=self.shift_size, dims=(1, 2))
-        x = shortcut + x
-        return x + self.mlp(self.norm2(x))
+        with torch.cuda.nvtx.range("wmhsa"):
+            shortcut = x
+            x = self.norm1(x)
+            if any(self.shift_size):
+                x = torch.roll(
+                    x,
+                    shifts=tuple(-shift for shift in self.shift_size),
+                    dims=(1, 2),
+                )
+            x = window_partition(x, self.window_size)
+            x = self.attn(x, self.attn_mask)
+            x = window_reverse(x, self.window_size, self.feature_size)
+            if any(self.shift_size):
+                x = torch.roll(x, shifts=self.shift_size, dims=(1, 2))
+            x = shortcut + x
+        with torch.cuda.nvtx.range("mlp"):
+            x = x + self.mlp(self.norm2(x))
+        return x
 
 
 class PatchEmbed(nn.Module):
