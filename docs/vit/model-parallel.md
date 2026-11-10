@@ -5,7 +5,7 @@
 Data parallelism still stores a full copy of the model and of the image on every GPU. At some point, as we grow the models, a local batch size of one also will not fit. `short_mp` is the next size up, `embed_dim: 1536` and `depth: 16`, with the same `patch_size: 16` and the same local batch of 1 (`global_batch_size: 4` on 4 GPUs). That step runs out of memory. Lowering the batch has nowhere left to go, so the replica itself has to be split. This is the typical way into model parallelism.
 
 ```bash
-sbatch -N 1 ./submit_pm_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
+sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -112,7 +112,7 @@ Swin, the FNO, and ConvNeXt do not look like that language-model block, so they 
 
 ## Running a model-parallel job
 
-[`submit_pm_mp.sh`](../../submit_pm_mp.sh) runs [`train_mp.py`](../../train_mp.py) with four tasks per node. The mesh flags are the same for every network. `dp` is whatever GPUs remain.
+[`submit_mp.sh`](../../submit_mp.sh) runs [`train_mp.py`](../../train_mp.py) with four tasks per node. The mesh flags are the same for every network. `dp` is whatever GPUs remain.
 
 ```text
 --tp      tensor-parallel size
@@ -122,7 +122,7 @@ Swin, the FNO, and ConvNeXt do not look like that language-model block, so they 
 ```
 
 ```bash
-sbatch --nodes=<nodes> ./submit_pm_mp.sh \
+sbatch --nodes=<nodes> ./submit_mp.sh \
     --yaml_config ./config/<file>.yaml --config <name> \
     --tp=1 --sp1=4 --sp2=1
 ```
@@ -131,7 +131,7 @@ For the ViT that ran out of memory, use 4 nodes. `sp1=4` shards the token sequen
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp \
-sbatch -N 4 ./submit_pm_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
+sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
     --tp=1 --sp1=4 --sp2=1
 ```
 
@@ -178,4 +178,4 @@ Picking `dp`, `tp`, and `sp1`/`sp2`, and which of them sits on the fast links in
 
 ## CUDA graphs (optional)
 
-[`train_mp_graphs.py`](../../train_mp_graphs.py) captures the training step in a CUDA graph and replays it. A graph removes the CPU launch gap between kernels. That gap matters when a step is many small launches, and when several communicators have to stay in lockstep: the CPU jitter shows up as ranks waiting on each other. [`submit_pm_mp.sh`](../../submit_pm_mp.sh) calls [`train_mp.py`](../../train_mp.py). Compare the two scripts for where the graph is captured and where it is replayed.
+[`train_mp_graphs.py`](../../train_mp_graphs.py) captures the training step in a CUDA graph and replays it. A graph removes the CPU launch gap between kernels. That gap matters when a step is many small launches, and when several communicators have to stay in lockstep: the CPU jitter shows up as ranks waiting on each other. [`submit_mp.sh`](../../submit_mp.sh) calls [`train_mp.py`](../../train_mp.py). Compare the two scripts for where the graph is captured and where it is replayed.

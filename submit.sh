@@ -1,18 +1,16 @@
 #!/bin/bash 
 #SBATCH -C gpu 
-#SBATCH -A ntrain5
-#SBATCH -q regular
-#SBATCH --ntasks-per-node 4
+#SBATCH -q shared
+#SBATCH -A dasrepo
 #SBATCH --cpus-per-task 32
-#SBATCH --gpus-per-node 4
-#SBATCH --time=01:00:00
+#SBATCH --gpus-per-task 1
+#SBATCH --gpu-bind none
+#SBATCH --time=00:30:00
 #SBATCH --image=nersc/pytorch:26.07.01
 #SBATCH --module=gpu,nccl-cu13-plugin
-#SBATCH -J vit-era5-dp
+#SBATCH -J vit-era5
 #SBATCH -o %x-%j.out
 
-# host paths, mounted as /data and /logs in the container; override from the environment, e.g.
-#   LOGDIR=$PSCRATCH/my_logs sbatch -N 1 ./submit_pm_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp
 DATADIR=${DATADIR:-/pscratch/sd/s/shas1693/data/sc26_tutorial_data}
 LOGDIR=${LOGDIR:-${SCRATCH}/sc26-dl-tutorial/logs}
 mkdir -p ${LOGDIR}

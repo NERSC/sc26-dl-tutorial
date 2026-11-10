@@ -93,7 +93,7 @@ collective protocol traffic. Shared parameters are synchronized at initializatio
 | Field | Planned value |
 | --- | --- |
 | World size | 8 |
-| Launch method | `sbatch --nodes=2 submit_pm_mp.sh ...` with four tasks and GPUs per node |
+| Launch method | `sbatch --nodes=2 submit_mp.sh ...` with four tasks and GPUs per node |
 | Mesh dimensions | `dp=2, tp=1, sp1=4, sp2=1` |
 | Sequence parallelism | `false` |
 | Rank order | `tp-sp1-sp2-dp` |

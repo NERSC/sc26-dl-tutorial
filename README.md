@@ -108,16 +108,16 @@ my_vit:
 
 ### Submit a job and view the results
 
-**Example: submit a single-GPU job.** [`submit_pm.sh`](submit_pm.sh) starts the tutorial container and runs [`train.py`](train.py) with one GPU per task. The script mounts the dataset and the log directory. This command is only an example of the submission syntax; we will mark job submission scripts to be submitted explicitly in the later sections. 
+**Example: submit a single-GPU job.** [`submit.sh`](submit.sh) starts the tutorial container and runs [`train.py`](train.py) with one GPU per task. The script mounts the dataset and the log directory. This command is only an example of the submission syntax; we will mark job submission scripts to be submitted explicitly in the later sections. 
 
 ```bash
-sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config short
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
 ```
 
 The copied block from above is the same script with a different `--config`:
 
 ```bash
-sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config my_vit
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config my_vit
 ```
 
 Arguments after the script name are forwarded to `train.py`. Slurm writes the job output to a `.out` file beside the script. `squeue --me` shows the job id.
@@ -129,7 +129,7 @@ Open [`start_tensorboard.ipynb`](start_tensorboard.ipynb) on `LOGDIR` to plot th
 Let us begin. Start by submitting the baseline job; this will take several minutes to complete since it is unoptimized and running on a single GPU.
 
 ```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config short
+ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
 ```
 
 The profile of that run, and the optimized runs after it, are on the [ViT single-GPU page](docs/vit/single-gpu.md).

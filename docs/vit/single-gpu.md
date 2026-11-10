@@ -11,7 +11,7 @@ The baseline leaves the GPU idle while a 4096 × 4096 batch is read, and it runs
 This profiled baseline is the first job to run in the tutorial which should have been submitted after the setup:
 
 ```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config short
+ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
 ```
 
 The first three epochs look like this:
@@ -68,7 +68,7 @@ Tensor cores are already in use for FP32 GEMMs through TF32, which PyTorch enabl
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short_opt \
-sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config short_opt --run_num short_opt
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short_opt --run_num short_opt
 ```
 
 The first epoch pays for `torch.compile`. The next two are the steady rate:
@@ -123,7 +123,7 @@ In the timeline, DALI shows up as extra CUDA streams beside the PyTorch stream. 
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short_opt_dali \
-sbatch -n 1 ./submit_pm.sh --yaml_config ./config/ViT.yaml --config short_opt_dali --run_num dali
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short_opt_dali --run_num dali
 ```
 
 The first epoch still pays for `torch.compile`. The next two are the steady rate:
