@@ -42,11 +42,13 @@ MODEL = os.getenv("TEST_MODEL", "vit").lower()
 if MODEL not in {"vit", "swin", "fno", "convnext"}:
     raise ValueError("TEST_MODEL must be one of: vit, swin, fno, convnext")
 
+# Each model lists only the fields it has. decode_case maps a row onto the
+# arguments build_models reads.
 CASES = {
     "convnext": [
-        ("kernel3", 2, 14, 14, 2, 2, 8, 1, 2, 2e-5),
-        # 15x15 patches: uneven under two or four spatial ranks; min tile=3.
-        ("uneven", 2, 30, 30, 2, 2, 8, 1, 2, 2e-5),
+        # (name, batch/DP rank, H, W, patch, channels, embed, depth, kernel, tolerance)
+        ("kernel3", 2, 14, 14, 2, 2, 8, 2, 3, 2e-5),
+        ("uneven", 2, 30, 30, 2, 2, 8, 2, 7, 2e-5),
     ],
     "vit": [
         # (name, batch/DP rank, H, W, patch, channels, embed, heads, depth, tolerance)
@@ -55,22 +57,38 @@ CASES = {
     ],
     "swin": [
         # (name, batch/DP rank, H, W, patch, channels, embed, heads, depth, tolerance)
-        # Swin's window size is fixed to (4, 4) in build_models().
         ("small", 4, 128, 128, 4, 4, 64, 8, 2, 1e-5),
         ("rectangular", 4, 256, 512, 4, 4, 64, 8, 2, 1e-5),
     ],
     "fno": [
-        # (name, batch/DP rank, H, W, unused, channels, embed, unused, depth, tolerance)
-        # FNO has no patch size or attention heads; those tuple positions are placeholders.
-        ("even", 4, 64, 64, 1, 4, 32, 1, 2, 1e-5),
+        # (name, batch/DP rank, H, W, channels, embed, depth, downsample, tolerance)
+        ("even", 4, 64, 64, 4, 32, 2, 1, 1e-5),
+        ("downsample", 4, 64, 64, 4, 32, 2, 2, 1e-5),
     ],
 }
 
 
-def build_models(
-    model_name, height, width, patch_size, channels, embed, heads, depth,
-    kernel_size=7,
-):
+def decode_case(model_name, case):
+    """Return the case name, grid, tolerance, and the model's architecture fields."""
+    if model_name == "convnext":
+        name, batch, height, width, patch, channels, embed, depth, kernel, tolerance = case
+        spec = dict(patch_size=patch, channels=channels, embed=embed, depth=depth, kernel_size=kernel)
+    elif model_name == "fno":
+        name, batch, height, width, channels, embed, depth, downsample, tolerance = case
+        spec = dict(channels=channels, embed=embed, depth=depth, downsample=downsample)
+    else:
+        name, batch, height, width, patch, channels, embed, heads, depth, tolerance = case
+        spec = dict(
+            patch_size=patch, channels=channels, embed=embed, heads=heads, depth=depth,
+        )
+    return name, batch, height, width, tolerance, spec
+
+
+def expand_cases(model_name):
+    return [decode_case(model_name, case) for case in CASES[model_name]]
+
+
+def build_models(model_name, height, width, spec):
     """Build matching serial/distributed models and this rank's spatial shard."""
     mesh = (
         comm.get_size("sp1"),
@@ -78,28 +96,31 @@ def build_models(
         comm.get_size("sp2"),
         comm.get_rank("sp2"),
     )
+    channels = spec["channels"]
     if model_name == "convnext":
-        kwargs = dict(img_size=(height, width), patch_size=patch_size,
-                      in_chans=channels, out_chans=channels, embed_dim=embed,
-                      depth=depth, kernel_size=kernel_size, layer_scale_init=0.5)
+        kwargs = dict(
+            img_size=(height, width), patch_size=spec["patch_size"],
+            in_chans=channels, out_chans=channels, embed_dim=spec["embed"],
+            depth=spec["depth"], kernel_size=spec["kernel_size"], layer_scale_init=0.5,
+        )
         shard = make_vit_spatial_shard(
-            (height, width), patch_size, *mesh, "tp-sp1-sp2-dp"
+            (height, width), spec["patch_size"], *mesh, "tp-sp1-sp2-dp"
         )
         return (ConvNeXtField(**kwargs),
                 DistributedConvNeXt(**kwargs, spatial_shard=shard), shard)
     if model_name == "vit":
         kwargs = dict(
             img_size=(height, width),
-            patch_size=patch_size,
+            patch_size=spec["patch_size"],
             in_chans=channels,
             out_chans=channels,
-            embed_dim=embed,
-            depth=depth,
-            num_heads=heads,
+            embed_dim=spec["embed"],
+            depth=spec["depth"],
+            num_heads=spec["heads"],
             qkv_bias=True,
         )
         shard = make_vit_spatial_shard(
-            (height, width), patch_size, *mesh, "tp-sp1-sp2-dp"
+            (height, width), spec["patch_size"], *mesh, "tp-sp1-sp2-dp"
         )
         return (
             VisionTransformer(**kwargs),
@@ -110,17 +131,17 @@ def build_models(
         window_size = (4, 4)
         kwargs = dict(
             img_size=(height, width),
-            patch_size=patch_size,
+            patch_size=spec["patch_size"],
             window_size=window_size,
             in_chans=channels,
             out_chans=channels,
-            embed_dim=embed,
-            depth=depth,
-            num_heads=heads,
+            embed_dim=spec["embed"],
+            depth=spec["depth"],
+            num_heads=spec["heads"],
             qkv_bias=True,
         )
         shard = make_swin_spatial_shard(
-            (height, width), patch_size, window_size, *mesh, "tp-sp1-sp2-dp"
+            (height, width), spec["patch_size"], window_size, *mesh, "tp-sp1-sp2-dp"
         )
         return (
             SwinTransformer(**kwargs),
@@ -128,14 +149,16 @@ def build_models(
             shard,
         )
 
+    downsample = spec["downsample"]
     kwargs = dict(
         img_size=(height, width),
         in_chans=channels,
         out_chans=channels,
-        embed_dim=embed,
-        depth=depth,
-        modes_kh=min(12, height),
-        modes_kw=min(17, width // 2 + 1),
+        embed_dim=spec["embed"],
+        depth=spec["depth"],
+        modes_kh=min(12, height // downsample),
+        modes_kw=min(17, (width // downsample) // 2 + 1),
+        downsample=downsample,
     )
     shard = make_grid_spatial_shard((height, width), *mesh)
     return FourierNeuralOperator(**kwargs), DistributedFNO(**kwargs), shard
@@ -172,26 +195,19 @@ def error_metrics(actual, expected):
 class TestDistributedModel(DistributedTestCase):
     """End-to-end serial equivalence for the model selected by TEST_MODEL."""
 
-    @parameterized.expand(CASES[MODEL])
+    @parameterized.expand(expand_cases(MODEL))
     def test_distributed_model(
         self,
         _case_name,
         batch_per_dp,
         height,
         width,
-        patch_size,
-        channels,
-        embed,
-        heads,
-        depth,
         tolerance,
+        spec,
     ):
-        kernel_size = 3 if MODEL == "convnext" and _case_name == "kernel3" else 7
+        channels = spec["channels"]
         batch = batch_per_dp * comm.get_size("dp")
-        reference, model, shard = build_models(
-            MODEL, height, width, patch_size, channels, embed, heads, depth,
-            kernel_size,
-        )
+        reference, model, shard = build_models(MODEL, height, width, spec)
         reference = reference.to(self.device)
         model = model.to(self.device)
 
