@@ -556,7 +556,7 @@ if __name__ == '__main__':
     if world_rank==0:
         if not os.path.isdir(expDir):
             os.makedirs(expDir)
-        logging_utils.log_to_file(logger_name=None, log_filename=os.path.join(expDir, 'out.log'))
+        logging_utils.log_to_file(logger_name=None, log_filename=os.path.join(expDir, 'out.log'), mode='w')
         params.log()
         writer = SummaryWriter(log_dir=os.path.join(expDir, 'logs/'))
 

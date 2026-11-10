@@ -19,7 +19,7 @@ def config_logger(log_level=logging.INFO):
 
 
 def log_to_file(
-    logger_name=None, log_level=logging.INFO, log_filename="tensorflow.log"
+    logger_name=None, log_level=logging.INFO, log_filename="tensorflow.log", mode="w"
 ):
     """Attach a file handler to the named logger, or to the root logger."""
 
@@ -31,7 +31,7 @@ def log_to_file(
     else:
         log = logging.getLogger()
 
-    fh = logging.FileHandler(log_filename)
+    fh = logging.FileHandler(log_filename, mode=mode)
     fh.setLevel(log_level)
     fh.setFormatter(logging.Formatter(_format))
     log.addHandler(fh)
