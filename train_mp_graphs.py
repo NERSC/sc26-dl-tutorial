@@ -9,7 +9,7 @@ import pynvml
 
 import torch
 import torch.optim as optim
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from torch.distributed import ReduceOp
 
@@ -17,7 +17,7 @@ import logging
 from utils import logging_utils
 logging_utils.config_logger()
 from utils.YParams import YParams
-from utils import get_data_loader_distributed
+from utils import get_data_loader_distributed, profiled_batches
 from utils import comm
 from utils.loss import mse_loss
 from utils.metrics import rmse_spatial
@@ -27,7 +27,7 @@ from distributed.spatial_sharding import (
     make_swin_spatial_shard,
     make_vit_spatial_shard,
 )
-from networks import convnext_mp, fno_mp, swin_mp, vit_mp
+from networks import convnext_mp, fno_mp, swin_mp, vit_mp, vit_te
 
 from distributed.mappings import (
     allgather_forward_split_backward,
@@ -42,16 +42,20 @@ def build_model(params, spatial_shard):
     """Build the distributed network named by the parameters."""
     network = params.get("network", params.get("model", "vit")).lower()
     if network == "fno":
+        logging.info("using FNO")
         return fno_mp.FNO(params)
-    if network == "vit":
-        return vit_mp.ViT(params, spatial_shard=spatial_shard)
     if network == "swin":
-        if params.model_backend != "pytorch":
-            raise ValueError("Swin only supports the pytorch backend")
+        logging.info("using Swin")
         return swin_mp.Swin(params, spatial_shard=spatial_shard)
     if network == "convnext":
         return convnext_mp.ConvNeXt(params, spatial_shard=spatial_shard)
-    raise ValueError(f"unknown network {network!r}")
+    if network != "vit":
+        raise ValueError(f"unknown network {network!r}")
+    if params.model_backend == "transformer-engine":
+        logging.info("using transformer-engine backend")
+        return vit_te.ViT(params, spatial_shard=spatial_shard)
+    logging.info("using native backend")
+    return vit_mp.ViT(params, spatial_shard=spatial_shard)
 
 
 def capture_model(
@@ -88,7 +92,7 @@ def capture_model(
     with torch.cuda.stream(capture_stream):
         for _ in range(num_warmup):
             model.zero_grad(set_to_none=True)
-            with autocast(enabled=params.amp_enabled, dtype=params.amp_dtype):
+            with autocast("cuda", enabled=params.amp_enabled, dtype=params.amp_dtype):
                 static_output = model(static_input).to(device)
                 static_loss = loss_func(static_output, static_label)
 
@@ -111,7 +115,7 @@ def capture_model(
 
         # do the capture with the context manager:
         with torch.cuda.graph(graph):
-            with autocast(enabled=params.amp_enabled, dtype=params.amp_dtype): 
+            with autocast("cuda", enabled=params.amp_enabled, dtype=params.amp_dtype):
                 static_output = model(static_input).to(device)
                 static_loss = loss_func(static_output, static_label)
 
@@ -184,10 +188,7 @@ def train(
             "FNO's spectral weights; use 'bf16' or 'none'"
         )
 
-    if params.amp_dtype == torch.float16: 
-        scaler = GradScaler()
-    else:
-        scaler = None
+    scaler = GradScaler("cuda", enabled=params.amp_dtype == torch.float16)
 
     # weight initialization needs to be synced across shared weights
     if comm.get_size("tp-sp1-sp2") > 1:
@@ -203,6 +204,10 @@ def train(
 
     if world_rank == 0:
         logging.info(model)
+        logging.info(
+            "Local parameter count: %.3f M",
+            sum(parameter.numel() for parameter in model.parameters()) / 1e6,
+        )
         all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (1024. * 1024. * 1024.)
         logging.info(f"Scaffolding memory high watermark: {all_mem_gb} GB.")
 
@@ -272,12 +277,13 @@ def train(
     # Log initial loss on train and validation to tensorboard
     with torch.no_grad():
         inp, tar = map(lambda x: x.to(device), next(iter(train_data_loader)))
-        gen = model(inp)
-        tr_loss = loss_func(gen, tar)
-        inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
-        gen = model(inp)
-        val_loss = loss_func(gen, tar)
-        val_rmse = metric_func(gen, tar)
+        with autocast("cuda", enabled=params.amp_enabled, dtype=params.amp_dtype):
+            gen = model(inp)
+            tr_loss = loss_func(gen, tar)
+            inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
+            gen = model(inp)
+            val_loss = loss_func(gen, tar)
+            val_rmse = metric_func(gen, tar)
         if params.distributed:
             torch.distributed.all_reduce(tr_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
             torch.distributed.all_reduce(val_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
@@ -310,12 +316,10 @@ def train(
         model.train()
         step_count = 0
 
-        for i, data in enumerate(train_data_loader, 0):
-            if (epoch == 3 and i == 0):
-                torch.cuda.profiler.start()
-            if (epoch == 3 and i == len(train_data_loader) - 1):
-                torch.cuda.profiler.stop()
-
+        if epoch == 3:
+            torch.cuda.profiler.start()
+            torch.cuda.nvtx.range_push("train_epoch")
+        for i, data in enumerate(profiled_batches(train_data_loader, "train"), 0):
             with torch.cuda.nvtx.range(f"step {i}"):
                 iters += 1
                 with torch.cuda.nvtx.range(f"data copy in {i}"):
@@ -349,24 +353,9 @@ def train(
             step_count += 1
 
         torch.cuda.synchronize() # device sync to ensure accurate epoch timings
+        if epoch == 3:
+            torch.cuda.nvtx.range_pop()  # train_epoch
         end = time.time()
-
-        plot_fields = [
-            gather_field(field)
-            for field in (inp, tar, static_output)
-        ]
-        if world_rank==0:
-            iters_per_sec = step_count / (end - start)
-            samples_per_sec = params["global_batch_size"] * iters_per_sec
-            logging.info('Time taken for epoch %i is %f sec, avg %f samples/sec',
-                         epoch + 1, end - start, samples_per_sec)
-            logging.info('  Avg train loss=%f'%np.mean(tr_loss))
-            writer.add_scalar('Loss/train', np.mean(tr_loss), iters)
-            writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], iters)
-            writer.add_scalar('Avg iters per sec', iters_per_sec, iters)
-            writer.add_scalar('Avg samples per sec', samples_per_sec, iters)
-            fig = generate_images(plot_fields)
-            writer.add_figure('Visualization, field_2', fig, iters, close=True)
 
         val_start = time.time()
         val_loss = torch.zeros(1, device=device)
@@ -374,15 +363,20 @@ def train(
         valid_steps = 0
         model.eval()
 
+        if epoch == 3:
+            torch.cuda.nvtx.range_push("validation")
         with torch.inference_mode():
             with torch.no_grad():
-                for i, data in enumerate(val_data_loader, 0):
-                    with autocast(enabled=params.amp_enabled, dtype=params.amp_dtype):
-                        inp, tar = map(lambda x: x.to(device), data)
-                        gen = model(inp)
-                        val_loss += loss_func(gen, tar)
-                        val_rmse += metric_func(gen, tar)
-                    valid_steps += 1
+                for i, data in enumerate(profiled_batches(val_data_loader, "valid"), 0):
+                    with torch.cuda.nvtx.range(f"val step {i}"):
+                        with autocast(
+                            "cuda", enabled=params.amp_enabled, dtype=params.amp_dtype
+                        ):
+                            inp, tar = map(lambda x: x.to(device), data)
+                            gen = model(inp)
+                            val_loss += loss_func(gen, tar)
+                            val_rmse += metric_func(gen, tar)
+                        valid_steps += 1
 
                 if params.distributed:
                     torch.distributed.all_reduce(val_loss, op=ReduceOp.AVG, group=comm.get_group("dp"))
@@ -390,12 +384,39 @@ def train(
 
         val_rmse /= valid_steps # Avg validation rmse
         val_loss /= valid_steps
+        if epoch == 3:
+            torch.cuda.synchronize()
+            torch.cuda.nvtx.range_pop()  # validation
         val_end = time.time()
+
+        if epoch == 3:
+            torch.cuda.nvtx.range_push("plotting")
+        plot_fields = [
+            gather_field(field)
+            for field in (inp, tar, gen)
+        ]
+        if world_rank == 0:
+            fig = generate_images(plot_fields)
+            writer.add_figure("Visualization, field_2", fig, iters, close=True)
+        if epoch == 3:
+            torch.cuda.synchronize()
+            torch.cuda.nvtx.range_pop()  # plotting
+            torch.cuda.profiler.stop()
+
         if world_rank==0:
+            iters_per_sec = step_count / (end - start)
+            samples_per_sec = params["global_batch_size"] * iters_per_sec
+            logging.info('Time taken for epoch %i is %f sec, avg %f samples/sec',
+                         epoch + 1, end - start, samples_per_sec)
+            logging.info('  Avg train loss=%f'%np.mean(tr_loss))
             logging.info('  Avg val loss={}'.format(val_loss.item()))
             logging.info('  Total validation time: {} sec'.format(val_end - val_start)) 
+            writer.add_scalar('Loss/train', np.mean(tr_loss), iters)
             writer.add_scalar('Loss/valid', val_loss, iters)
             writer.add_scalar('RMSE(field_0)/valid', val_rmse.cpu().numpy()[0], iters)
+            writer.add_scalar('Learning Rate', optimizer.param_groups[0]['lr'], iters)
+            writer.add_scalar('Avg iters per sec', iters_per_sec, iters)
+            writer.add_scalar('Avg samples per sec', samples_per_sec, iters)
             writer.flush()
 
     torch.cuda.synchronize()

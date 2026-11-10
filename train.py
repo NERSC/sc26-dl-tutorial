@@ -4,6 +4,7 @@ import os
 import time
 import numpy as np
 import argparse
+import pynvml
 
 import torch
 import torch.optim as optim
@@ -43,6 +44,10 @@ def train(params, writer, local_rank, world_rank, world_size):
     torch.backends.cudnn.benchmark = True
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda:%d" % local_rank)
+
+    # init pynvml and get handle
+    pynvml.nvmlInit()
+    nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(device.index)
 
     # get data loader
     logging.info("rank %d, begin data loader init" % world_rank)
@@ -91,6 +96,10 @@ def train(params, writer, local_rank, world_rank, world_size):
             "Parameter count: %.3f M",
             sum(parameter.numel() for parameter in model.parameters()) / 1e6,
         )
+        all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (
+            1024.0 * 1024.0 * 1024.0
+        )
+        logging.info(f"Scaffolding memory high watermark: {all_mem_gb} GB.")
 
     if str(params.lr_schedule).lower() != "cosine":
         raise ValueError(
@@ -160,12 +169,10 @@ def train(params, writer, local_rank, world_rank, world_size):
 
         model.train()
         step_count = 0
+        if epoch == 3:
+            torch.cuda.profiler.start()
+            torch.cuda.nvtx.range_push("train_epoch")
         for i, data in enumerate(profiled_batches(train_data_loader, "train"), 0):
-            if epoch == 3 and i == 0:
-                torch.cuda.profiler.start()
-            if epoch == 3 and i == len(train_data_loader) - 1:
-                torch.cuda.profiler.stop()
-
             with torch.cuda.nvtx.range(f"step {i}"):
                 iters += 1
                 with torch.cuda.nvtx.range(f"data copy in {i}"):
@@ -177,6 +184,12 @@ def train(params, writer, local_rank, world_rank, world_size):
                     with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
                         gen = model(inp)
                         loss = loss_func(gen, tar)
+
+                if world_rank == 0 and i == 1:
+                    all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (
+                        1024.0 * 1024.0 * 1024.0
+                    )
+                    logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
 
                 grad_scaler.scale(loss).backward()
                 with torch.cuda.nvtx.range(f"optimizer"):
@@ -193,26 +206,9 @@ def train(params, writer, local_rank, world_rank, world_size):
             step_count += 1
 
         torch.cuda.synchronize()  # device sync to ensure accurate epoch timings
+        if epoch == 3:
+            torch.cuda.nvtx.range_pop()  # train_epoch
         end = time.time()
-
-        if world_rank == 0:
-            iters_per_sec = step_count / (end - start)
-            samples_per_sec = params["global_batch_size"] * iters_per_sec
-            logging.info(
-                "Time taken for epoch %i is %f sec, avg %f samples/sec",
-                epoch + 1,
-                end - start,
-                samples_per_sec,
-            )
-            logging.info("  Avg train loss=%f" % np.mean(tr_loss))
-            writer.add_scalar("Loss/train", np.mean(tr_loss), iters)
-            writer.add_scalar(
-                "Learning Rate", optimizer.param_groups[0]["lr"], iters
-            )
-            writer.add_scalar("Avg iters per sec", iters_per_sec, iters)
-            writer.add_scalar("Avg samples per sec", samples_per_sec, iters)
-            fig = generate_images([inp, tar, gen])
-            writer.add_figure("Visualization, field_2", fig, iters, close=True)
 
         val_start = time.time()
         val_loss = torch.zeros(1, device=device)
@@ -222,6 +218,8 @@ def train(params, writer, local_rank, world_rank, world_size):
         valid_steps = 0
         model.eval()
 
+        if epoch == 3:
+            torch.cuda.nvtx.range_push("validation")
         with torch.inference_mode():
             with torch.no_grad():
                 for i, data in enumerate(profiled_batches(val_data_loader, "valid"), 0):
@@ -240,15 +238,47 @@ def train(params, writer, local_rank, world_rank, world_size):
 
         val_rmse /= valid_steps  # Avg validation rmse
         val_loss /= valid_steps
+        if epoch == 3:
+            torch.cuda.synchronize()
+            torch.cuda.nvtx.range_pop()  # validation
         val_end = time.time()
+
+        if epoch == 3:
+            torch.cuda.nvtx.range_push("plotting")
         if world_rank == 0:
+            fig = generate_images([inp, tar, gen])
+            writer.add_figure("Visualization, field_2", fig, iters, close=True)
+        if epoch == 3:
+            torch.cuda.synchronize()
+            torch.cuda.nvtx.range_pop()  # plotting
+            torch.cuda.profiler.stop()
+
+        if world_rank == 0:
+            iters_per_sec = step_count / (end - start)
+            samples_per_sec = params["global_batch_size"] * iters_per_sec
+            logging.info(
+                "Time taken for epoch %i is %f sec, avg %f samples/sec",
+                epoch + 1,
+                end - start,
+                samples_per_sec,
+            )
+            logging.info("  Avg train loss=%f" % np.mean(tr_loss))
             logging.info("  Avg val loss={}".format(val_loss.item()))
             logging.info("  Total validation time: {} sec".format(val_end - val_start))
+            writer.add_scalar("Loss/train", np.mean(tr_loss), iters)
             writer.add_scalar("Loss/valid", val_loss, iters)
             writer.add_scalar(
                 "RMSE(field_0)/valid", val_rmse.cpu().numpy()[0], iters
             )
+            writer.add_scalar(
+                "Learning Rate", optimizer.param_groups[0]["lr"], iters
+            )
+            writer.add_scalar("Avg iters per sec", iters_per_sec, iters)
+            writer.add_scalar("Avg samples per sec", samples_per_sec, iters)
             writer.flush()
+
+    torch.cuda.synchronize()
+    pynvml.nvmlShutdown()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -334,3 +364,7 @@ if __name__ == "__main__":
     if params.distributed:
         torch.distributed.barrier()
     logging.info("DONE ---- rank %d" % world_rank)
+    if writer is not None:
+        writer.close()
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()

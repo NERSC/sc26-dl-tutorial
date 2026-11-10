@@ -186,12 +186,11 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
         inp, tar = map(lambda x: x.to(device), next(iter(train_data_loader)))
         with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
             gen = model(inp)
-        tr_loss = loss_func(gen, tar)
-        inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
-        with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
+            tr_loss = loss_func(gen, tar)
+            inp, tar = map(lambda x: x.to(device), next(iter(val_data_loader)))
             gen = model(inp)
-        val_loss = loss_func(gen, tar)
-        val_rmse = metric_func(gen, tar)
+            val_loss = loss_func(gen, tar)
+            val_rmse = metric_func(gen, tar)
         if params.distributed:
             torch.distributed.all_reduce(
                 tr_loss, op=ReduceOp.AVG, group=comm.get_group("dp")
