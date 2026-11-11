@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --ntasks-per-node 1
-#SBATCH --cpus-per-task 96
+#SBATCH --cpus-per-task 48
 #SBATCH --gpus-per-node 4
 #SBATCH --time=00:30:00
 #SBATCH -J vit-era5-dp
@@ -15,7 +15,7 @@ args=("$@")
 export HDF5_USE_FILE_LOCKING=FALSE
 export OMP_NUM_THREADS=1
 
-# Profiling: nsys wraps each torchrun worker, so every rank writes its own report
+# Profiling
 PROFILE_CMD=()
 if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     echo "Enabling profiling..."
@@ -24,11 +24,8 @@ if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     PROFILE_CMD=(nsys profile ${NSYS_ARGS} -o "${NSYS_OUTPUT}")
 fi
 
-# One torchrun per node; torchrun starts one worker per GPU and sets
-# RANK, LOCAL_RANK, WORLD_SIZE, MASTER_ADDR and MASTER_PORT for each of them.
-# Request fewer GPUs with e.g. `sbatch --gpus-per-node 4`; NPROC_PER_NODE follows.
 export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
-export MASTER_PORT=29500
+export MASTER_PORT=$((29500 + SLURM_JOB_ID % 2000))
 NPROC_PER_NODE=${NPROC_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
 
 set -x
