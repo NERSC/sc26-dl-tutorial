@@ -16,6 +16,7 @@ base: &base
   amp_mode: none
   enable_fused: false
   enable_jit: false
+  activation_checkpoint: false
   expdir: '/logs'
   lr_schedule: 'cosine'
   lr: 5E-4
@@ -105,3 +106,7 @@ short_mp_te: &short_mp_te
   model_backend: 'transformer-engine'
   enable_jit: false
   enable_fused: true
+
+short_mp_ckpt:
+  <<: *short_mp
+  activation_checkpoint: true

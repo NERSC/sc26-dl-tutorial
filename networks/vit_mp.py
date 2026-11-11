@@ -5,6 +5,7 @@ from functools import partial
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from networks.helpers import trunc_normal_
 from utils import comm
@@ -345,10 +346,12 @@ class VisionTransformer(nn.Module):
         norm_layer=LayerNorm,
         *,
         spatial_shard,
+        activation_checkpoint=False,
         **kwargs,
     ):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
+        self.activation_checkpoint = activation_checkpoint
         self.patch_size = patch_size
         self.img_size = tuple(img_size)
         self.spatial_shard = spatial_shard
@@ -454,7 +457,10 @@ class VisionTransformer(nn.Module):
         with torch.cuda.nvtx.range("embed"):
             x = self.prepare_tokens(x)
         for block in self.blocks:
-            x = block(x)
+            if self.training and self.activation_checkpoint:
+                x = checkpoint(block, x, use_reentrant=False)
+            else:
+                x = block(x)
         x = self.norm(x)
         with torch.cuda.nvtx.range("head"):
             return self.forward_head(x)
@@ -476,5 +482,6 @@ def ViT(params, spatial_shard, **kwargs):
         drop_rate=float(params.dropout),
         attn_drop_rate=float(params.dropout),
         spatial_shard=spatial_shard,
+        activation_checkpoint=bool(params.activation_checkpoint),
         **kwargs,
     )

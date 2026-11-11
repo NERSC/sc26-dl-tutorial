@@ -203,6 +203,21 @@ A few sizes have to divide evenly. Swin's `window_size` has to divide the patch 
 
 Picking `dp`, `tp`, and `sp1`/`sp2`, and which of them sits on the fast links inside a node, depends on how much each collective moves and on the machine. The usual tool for that choice is a performance model. [Performance models for transformers in science](https://arxiv.org/abs/2410.00273) works through one.
 
+## Activation checkpointing
+
+Activation checkpointing is an alternative that leaves the replica whole. `short_mp_ckpt` is the out-of-memory model with `activation_checkpoint: true`. Each block keeps its input, and the backward recomputes the block. One node, with tensor and spatial parallelism off:
+
+```bash
+sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
+    --tp=1 --sp1=1 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_ckpt/1MP/ckpt/out.log`. Profiling stays off.
+
+The step is much slower, because every block runs again in the backward. A slower step can also cost more GPU hours than splitting the same model across more GPUs. There is a floor. The checkpoint still stores the weights, the input to each block, and the activations of the block being recomputed. Grow the model past that remainder and checkpointing cannot make the step fit.
+
+*Try this run. What do you see for memory after the forward, and for samples per second?*
+
 ## CUDA graphs (optional)
 
 [`train_mp_graphs.py`](../../train_mp_graphs.py) captures the training step in a CUDA graph and replays it. A graph removes the CPU launch gap between kernels. That gap matters when a step is many small launches, and when several communicators have to stay in lockstep: the CPU jitter shows up as ranks waiting on each other. [`submit_mp.sh`](../../submit_mp.sh) calls [`train_mp.py`](../../train_mp.py). Compare the two scripts for where the graph is captured and where it is replayed.

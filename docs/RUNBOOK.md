@@ -121,6 +121,18 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`
 
 Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
 
+### 11. Activation checkpointing — `short_mp_ckpt`, 4 GPUs
+
+Same model as the out-of-memory run, with `activation_checkpoint: true`. `--tp=1 --sp1=1 --sp2=1` leaves the replica whole on one node.
+
+```bash
+sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
+    --tp=1 --sp1=1 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_ckpt/1MP/ckpt/out.log`
+
+
 ---
 
 ## Swin
