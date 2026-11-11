@@ -11,8 +11,11 @@ The baseline leaves the GPU idle while a 4096 × 4096 batch is read, and it runs
 This profiled baseline is the first job to run in the tutorial which should have been submitted after the setup:
 
 ```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short \
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short --run_num short
 ```
+
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/short/out.log`. Profile: `vit_short.0.nsys-rep`.
 
 The first three epochs look like this:
 
@@ -40,7 +43,7 @@ Recorded performance:
 - GPU memory: 30.916 GB peak.
 - Throughput: 0.486 samples/sec on average.
 
-The script wraps the process in `nsys profile` and writes `baseline.<rank>.nsys-rep` under the log directory. `--trace=cuda,nvtx` keeps the trace to CUDA and the ranges we added. `-c cudaProfilerApi` tells Nsight to record only the stretch between `profiler.start` and `profiler.stop`. Copy the report back and open it in the Nsight Systems install from [Setup](../../README.md#setup). The same prefix works on the later job scripts.
+The script wraps the process in `nsys profile` and writes `vit_short.<rank>.nsys-rep` under the log directory. `--trace=cuda,nvtx` keeps the trace to CUDA and the ranges we added. `-c cudaProfilerApi` tells Nsight to record only the stretch between `profiler.start` and `profiler.stop`. Copy the report back and open it in the Nsight Systems install from [Setup](../../README.md#setup). The same prefix works on the later job scripts.
 
 Zoomed out, the timeline has idle gaps between steps. Those gaps are the data load, which the next section closes.
 

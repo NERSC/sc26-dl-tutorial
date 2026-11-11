@@ -129,7 +129,8 @@ Open [`start_tensorboard.ipynb`](start_tensorboard.ipynb) on `LOGDIR` to plot th
 Let us begin. Start by submitting the baseline job; this will take several minutes to complete since it is unoptimized and running on a single GPU.
 
 ```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short \
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short --run_num short
 ```
 
 The profile of that run, and the optimized runs after it, are on the [ViT single-GPU page](docs/vit/single-gpu.md).
