@@ -9,11 +9,12 @@ The mesh is the same one documented on the [ViT model-parallel page](../vit/mode
 `short_mp` is the same size-up that ran out of memory for the ViT: `patch_size: 16`, `embed_dim: 1536`, `depth: 16`, local batch 1. The patch grid is 256×256, which 16 divides. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU. Window attention stores less activation memory than full attention. It is not enough: the forward still runs out of memory, in the local `torch.roll` inside `_distributed_roll`. With one spatial rank that roll never leaves the GPU. Profiling stays off.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_oom \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 \
+    ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`.
 
 The model is built before the step fails. The log reports a local parameter count of 555.545 M.
 
@@ -26,15 +27,15 @@ torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 384.00 MiB. GPU 2 
 
 ## Spatial split
 
-`sp1=4` shards one spatial axis. The local grid is 64×256, and window 16 divides both sides. The shift on odd blocks is half a window, 8, which is inside that local grid. Four nodes leave `dp=4`, so the global batch of 4 keeps the local batch at 1. A group of size 1 on `sp2` rolls locally.
+`sp1=4` shards one spatial axis. The local grid is 64×256, and window 16 divides both sides. The shift on odd blocks is half a window, 8, which is inside that local grid. Two nodes leave `dp=4`, so the global batch of 4 keeps the local batch at 1. A group of size 1 on `sp2` rolls locally.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_mp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_mp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_mp \
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`. Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`. Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
 `sp1=4` brings the local parameter count to 480.048 M. The first three epochs stay under 32 GB. Epoch 4 is the profiled epoch.
 

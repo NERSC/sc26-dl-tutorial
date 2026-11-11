@@ -2,7 +2,7 @@
 
 [Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Model parallel](model-parallel.md)
 
-Each GPU still holds a full copy of the Swin and a different slice of the batch. The wiring is the same as the [ViT data-parallel page](../vit/data-parallel.md): [`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) with four tasks per node, and `DistributedDataParallel` averages the gradients. Window attention is a short step, so this page starts at the larger model with local batch 1.
+Each GPU still holds a full copy of the Swin and a different slice of the batch. The wiring is the same as the [ViT data-parallel page](../vit/data-parallel.md): [`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) under `torchrun` with four GPUs per node, and `DistributedDataParallel` averages the gradients. Window attention is a short step, so this page starts at the larger model with local batch 1.
 
 ## A larger model at local batch 1
 
@@ -13,7 +13,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali_big \
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big_profile
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`.
 
 Profiles: `swin_short_opt_dali_big.0.nsys-rep` through `swin_short_opt_dali_big.3.nsys-rep`.
 
@@ -53,7 +53,7 @@ The gradient all-reduces are NCCL kernels on their own stream, issued during the
 sbatch -N 4 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big_dp16 --run_num swin_big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`.
 
 After the first epoch the run holds 25.6 samples/sec, up from 6.66 on 4 GPUs. The forward peaks at 36.142 GB.
 

@@ -13,7 +13,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short --run_num swin
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/swin/out.log`. Profile: `swin_short.0.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/swin/out.log`. Profile: `swin_short.0.nsys-rep`.
 
 The first three epochs look like this:
 
@@ -54,7 +54,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt --run_num swin_opt
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/swin_opt/out.log`. Profile: `swin_short_opt.0.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/swin_opt/out.log`. Profile: `swin_short_opt.0.nsys-rep`.
 
 The first epoch pays for `torch.compile`. The next two are the steady rate:
 
@@ -95,7 +95,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt_dali --run_num swin_dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`. Profile: `swin_short_opt_dali.0.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`. Profile: `swin_short_opt_dali.0.nsys-rep`.
 
 The first epoch still pays for `torch.compile`. The next two are the steady rate:
 
