@@ -2,7 +2,7 @@
 
 [Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Model parallel](model-parallel.md)
 
-Each GPU still holds a full copy of the FNO and a different slice of the batch. The wiring is the same as the [ViT data-parallel page](../vit/data-parallel.md): [`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) with four tasks per node, and `DistributedDataParallel` averages the gradients. This page starts at the larger model with local batch 1.
+Each GPU still holds a full copy of the FNO and a different slice of the batch. The wiring is the same as the [ViT data-parallel page](../vit/data-parallel.md): [`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) under `torchrun` with four GPUs per node, and `DistributedDataParallel` averages the gradients. This page starts at the larger model with local batch 1.
 
 ## A larger model at local batch 1
 

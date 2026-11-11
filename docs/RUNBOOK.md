@@ -71,7 +71,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/big16/out.log`
 `embed_dim: 1536` and `depth: 16`, local batch still 1. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU, so this is the out-of-memory run. Profiling stays off.
 
 ```bash
-sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+sbatch -N 1 --gpus-per-node 4 \
     ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
     --tp=1 --sp1=1 --sp2=1
 ```
@@ -127,7 +127,7 @@ Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
 Same model as the out-of-memory run, with `activation_checkpoint: true`. `--tp=1 --sp1=1 --sp2=1` leaves the replica whole on one node.
 
 ```bash
-sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+sbatch -N 1 --gpus-per-node 4 \
     ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
     --tp=1 --sp1=1 --sp2=1
 ```
@@ -196,7 +196,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`
 `patch_size: 16`, `embed_dim: 1536`, and `depth: 16`, local batch still 1. The patch grid is 256×256, which 16 divides. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU. This is the same size-up that ran out of memory for the ViT. Profiling stays off.
 
 ```bash
-sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+sbatch -N 1 --gpus-per-node 4 \
     ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
@@ -280,7 +280,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`
 `embed_dim: 260` and `downsample: 2`, local batch still 1. The latent grid is 2048×2048. `--tp=1 --sp1=1 --sp2=1` leaves the whole field on every GPU. Profiling stays off.
 
 ```bash
-sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+sbatch -N 1 --gpus-per-node 4 \
     ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
@@ -344,7 +344,7 @@ Global batch 16, local batch 4. The learning rate is `1e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp4 \
-sbatch -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp4 \
+sbatch -N 1 --time=00:30:00 -J convnext_dp4 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp4 --run_num convnext_dp4
 ```
 
@@ -360,7 +360,7 @@ Global batch 64, local batch 4. The learning rate is `2e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp16 \
-sbatch -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp16 \
+sbatch -N 4 --time=00:30:00 -J convnext_dp16 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp16 --run_num convnext_dp16
 ```
 
@@ -376,7 +376,7 @@ The training forward runs out of memory in the channel MLP's first linear layer.
 
 ```bash
 ENABLE_PROFILING=0 \
-sbatch -N 1 -n 1 --ntasks-per-node=1 --gpus-per-node=1 --gpu-bind=none \
+sbatch -N 1 --gpus-per-node=1 \
     --time=00:30:00 -J convnext_unsplit ./submit_mp.sh \
     --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_unsplit \
     --tp=1 --sp1=1 --sp2=1
@@ -392,7 +392,7 @@ This run fits and completes training and validation.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4 \
-sbatch -N 1 -n 4 --ntasks-per-node=4 --gpus-per-node=4 --time=00:30:00 -J convnext_sp4 \
+sbatch -N 1 --gpus-per-node=4 --time=00:30:00 -J convnext_sp4 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_sp4 \
     --tp=1 --sp1=4 --sp2=1
 ```
@@ -408,7 +408,7 @@ global batch becomes 16, and `lr=1e-3`. `num_iters: 80` schedules five epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4_dp4 \
-sbatch -N 2 -n 16 --ntasks-per-node=8 --time=00:30:00 -J convnext_sp4_dp4 \
+sbatch -N 2 --time=00:30:00 -J convnext_sp4_dp4 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp_dp4 --run_num convnext_sp4_dp4 \
     --tp=1 --sp1=4 --sp2=1
 ```

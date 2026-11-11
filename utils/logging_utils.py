@@ -7,12 +7,15 @@ _format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
 def slurm_filter(record):
-    """Keep log records only on Slurm process zero."""
-    return int(os.environ["SLURM_PROCID"]) == 0
+    """Keep log records only on global rank zero.
+
+    torchrun sets RANK for each worker; plain srun launches only set SLURM_PROCID.
+    """
+    return int(os.environ.get("RANK", os.environ.get("SLURM_PROCID", 0))) == 0
 
 
 def config_logger(log_level=logging.INFO):
-    """Configure the root logger and keep output on Slurm process zero."""
+    """Configure the root logger and keep output on global rank zero."""
     logging.basicConfig(format=_format, level=log_level)
     root_logger = logging.getLogger()
     root_logger.addFilter(slurm_filter)

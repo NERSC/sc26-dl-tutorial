@@ -6,7 +6,7 @@ The [single-GPU step](single-gpu.md) is in good shape. The next gain is more GPU
 
 ## How the job is wired
 
-[`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) with four tasks on each node, one process per GPU. `-N` is the number of nodes, so one node is 4 GPUs and four nodes are 16.
+[`submit_dp.sh`](../../submit_dp.sh) starts one [`torchrun`](https://pytorch.org/docs/stable/elastic/run.html) per node, and `torchrun` starts four copies of [`train.py`](../../train.py), one process per GPU. `-N` is the number of nodes, so one node is 4 GPUs and four nodes are 16.
 
 ```bash
 sbatch -N <nodes> ./submit_dp.sh --yaml_config ./config/ViT.yaml --config <name>
@@ -14,7 +14,7 @@ sbatch -N <nodes> ./submit_dp.sh --yaml_config ./config/ViT.yaml --config <name>
 
 *Why one process per GPU, rather than one process per node that owns all four devices?*
 
-DDP can form its process group in several ways. This code uses environment variables, which Slurm already knows. [`export_DDP_vars.sh`](../../export_DDP_vars.sh), sourced by the job script, publishes `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, and the master address and port. Near the bottom of `train.py`, `torch.distributed.init_process_group` reads those and brings NCCL up.
+DDP can form its process group in several ways. This code uses environment variables. The `torchrun` instances on the nodes rendezvous at the first node of the job (`--rdzv_endpoint`), agree on the global layout, and give each worker its `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, and the master address and port. Near the bottom of `train.py`, `torch.distributed.init_process_group` reads those and brings NCCL up.
 
 Each rank has to see its own slice of the global batch, of size `global_batch_size / world_size`. The slice is built by `DistributedSampler` in [`utils/data_loader.py`](../../utils/data_loader.py). Find that constructor and check which of `data_num_shards` and `data_shard_id` it receives.
 

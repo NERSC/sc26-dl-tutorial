@@ -118,30 +118,18 @@ def init(params, verbose=False):
 
 def init_process_group():
     """Initialize the NCCL process group from the distributed environment."""
-    world_size = int(os.getenv("WORLD_SIZE", 1))
-    world_rank = int(os.getenv("RANK", 0))
-    port = int(os.getenv("MASTER_PORT", 0))
-    master_address = os.getenv("MASTER_ADDR")
+    # RANK, WORLD_SIZE, MASTER_ADDR and MASTER_PORT come from torchrun (or from
+    # export_DDP_vars.sh under a plain srun launch). env:// also reuses the
+    # torchrun agent's TCP store instead of trying to bind a second one.
     local_rank = int(os.getenv("LOCAL_RANK", 0))
     device = torch.device("cuda", local_rank)
     torch.cuda.set_device(device)
 
     with disable_logging():
-        # create tcp store
-        store = dist.TCPStore(
-            host_name=master_address,
-            port=port,
-            world_size=world_size,
-            is_master=(world_rank == 0),
-            timeout=dt.timedelta(seconds=900),
-        )
-
-        # initialize process groups
         dist.init_process_group(
             backend="nccl",
-            rank=world_rank,
-            world_size=world_size,
-            store=store,
+            init_method="env://",
+            timeout=dt.timedelta(seconds=900),
             device_id=device,
         )
 

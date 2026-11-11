@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --ntasks-per-node 8
-#SBATCH --cpus-per-task 12
+#SBATCH --ntasks-per-node 1
+#SBATCH --cpus-per-task 96
 #SBATCH --gpus-per-node 8
 #SBATCH --time=00:30:00
 #SBATCH -J vit-era5-mp
@@ -15,24 +15,33 @@ args=("$@")
 export HDF5_USE_FILE_LOCKING=FALSE
 export OMP_NUM_THREADS=1
 
-# Profiling
+# Profiling: nsys wraps each torchrun worker, so every rank writes its own report
+PROFILE_CMD=()
 if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     echo "Enabling profiling..."
     NSYS_ARGS="--trace=cuda,cublas,nvtx --cuda-graph-trace=node --kill none -c cudaProfilerApi --capture-range-end=stop -f true --trace-fork-before-exec=true"
-    NSYS_OUTPUT=/logs/${PROFILE_OUTPUT:-"profile"}.%q{SLURM_PROCID}
-    export PROFILE_CMD="nsys profile $NSYS_ARGS -o $NSYS_OUTPUT"
+    NSYS_OUTPUT=/logs/${PROFILE_OUTPUT:-"profile"}.%q{RANK}
+    PROFILE_CMD=(nsys profile ${NSYS_ARGS} -o "${NSYS_OUTPUT}")
 fi
 
+# One torchrun per node; torchrun starts one worker per GPU and sets
+# RANK, LOCAL_RANK, WORLD_SIZE, MASTER_ADDR and MASTER_PORT for each of them.
+# Request fewer GPUs with e.g. `sbatch --gpus-per-node 4`; NPROC_PER_NODE follows.
 export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
+export MASTER_PORT=29500
+NPROC_PER_NODE=${NPROC_PER_NODE:-${SLURM_GPUS_ON_NODE:-8}}
 
 # if cuda graphs, use train_mp_graphs.py
 set -x
-srun -u --cpu-bind=none \
+srun -u --ntasks-per-node=1 --cpu-bind=none \
     --container-image="${IMAGE}" \
     --container-mounts="${DATADIR}:/data,${LOGDIR}:/logs" \
     --container-workdir="${SLURM_SUBMIT_DIR:-${PWD}}" \
-    bash -c '
-    source export_DDP_vars.sh
-    export OMP_NUM_THREADS=1
-    '"${PROFILE_CMD}"' python train_mp.py "$@"
-    ' bash "${args[@]}"
+    torchrun \
+        --nnodes="${SLURM_JOB_NUM_NODES}" \
+        --nproc_per_node="${NPROC_PER_NODE}" \
+        --rdzv_id="${SLURM_JOB_ID}" \
+        --rdzv_backend=c10d \
+        --rdzv_endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
+        --no-python \
+        "${PROFILE_CMD[@]}" python train_mp.py "${args[@]}"
