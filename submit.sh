@@ -23,8 +23,6 @@ if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     export PROFILE_CMD="nsys profile $NSYS_ARGS -o $NSYS_OUTPUT"
 fi
 
-export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
-
 set -x
 srun -u --cpu-bind=none \
     --container-image="${IMAGE}" \
