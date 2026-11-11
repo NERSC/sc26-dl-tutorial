@@ -22,10 +22,42 @@ each rank has two validation batches of 4.
 
 ## Scaling
 
-For mean global throughput `T`, speedup is `T_N / T_1` and efficiency is
-`T_N / (N * T_1)`. The trainer reports global samples/sec. Throughput
-measurements leave out epoch 1 and the profiled epoch.
+Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-Profile every rank. Epoch 4 is the profiled epoch. In Nsight, compare gradient
-reductions, their overlap with backward computation, and input stalls. The
-[runbook](../RUNBOOK.md#convnext) has the submission commands and output paths.
+| GPUs | Global batch | Throughput (samples/sec) | GPU memory after forward (GB) |
+|---|---|---|---|
+| 1 | 4 | 11.26 | 23.129 |
+| 4 | 16 | 59.97 | 23.256 |
+| 16 | 64 | 170.82 | 22.834 |
+
+The trainer reports global throughput. Memory stays close to the single-GPU
+run because each GPU still holds the same model and local batch of four.
+
+## Four GPUs
+
+DP4 reaches 59.97 samples/sec versus 11.26 on one GPU. The 5.33× increase is
+an end-to-end result: the single-GPU DALI baseline still has input stalls,
+and the gaps are shorter in this DP4 capture. The training steps themselves
+remain around 154–160 ms in the two profiles.
+
+![ConvNeXt DP4 rank 0, short training steps with smaller input gaps](../../tutorial_images/convnext_dp4.png)
+
+Profile: `convnext_dp4.0.nsys-rep`. Gradient synchronization adds NCCL calls
+during backward. Training and validation complete all five epochs, with
+validation loss falling from 0.2786 to 0.1238.
+
+## Sixteen GPUs
+
+`short_opt_dali_dp16` reaches 170.82 samples/sec, 2.85× the four-GPU rate.
+Each rank runs four training steps per epoch. The visible steps in
+`convnext_dp16.0.nsys-rep` are closely packed, at about 159–162 ms each.
+
+![ConvNeXt DP16 rank 0, consecutive training steps across four nodes](../../tutorial_images/convnext_dp16.png)
+
+This run also completes five epochs of training and validation. Validation
+loss falls from 0.4162 to 0.2585. The larger global batch makes fewer optimizer
+updates over the same training samples, and this run uses the larger validation
+set described above.
+
+The [runbook](../RUNBOOK.md#convnext) has the submission commands and output
+paths. Continue with [spatial parallelism](model-parallel.md).

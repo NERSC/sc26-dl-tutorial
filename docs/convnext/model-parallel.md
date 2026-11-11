@@ -26,6 +26,37 @@ On one GPU, `tp=1, sp1=1, sp2=1` keeps the complete field on the device.
 On four GPUs, `tp=1, sp1=4, sp2=1` gives each rank a 64×256 feature tile.
 Both runs have one DP replica and the same batch of four samples.
 
+## No split
+
+The unsharded run builds the model, then runs out of memory in the channel
+MLP's first linear layer during the training forward pass. It does not
+complete an epoch. The relevant lines from `convnext_unsplit-61122753.out` are:
+
+```text
+    x = self.fc1(x)
+    ...
+    return F.linear(input, self.weight, self.bias)
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.50 GiB.
+```
+
+## Four-way spatial split
+
+`sp1=4` fits the same model and batch on one four-GPU node. It completes all
+five epochs of training and validation. The local parameter count remains
+57.948 M, because spatial splitting keeps the weights replicated.
+
+Recorded performance, leaving out epoch 1 and the profiled epoch:
+
+- GPU memory: 27.561 GB after the forward pass.
+- Throughput: 15.12 samples/sec across 4 GPUs.
+- Validation loss: 0.1449 in epoch 1, falling to 0.0493 in epoch 5.
+
+The steps in `convnext_sp4.0.nsys-rep` are about 264 ms and sit next to one
+another. The NCCL row shows the repeated calls during the forward for halo
+exchange, followed by communication during backward.
+
+![ConvNeXt four-way spatial profile, consecutive steps with NCCL calls during the forward](../../tutorial_images/convnext_sp4.png)
+
 ## Four replicas across four nodes
 
 `short_mp_dp4` keeps the same model and `tp=1, sp1=4, sp2=1`. Sixteen GPUs
@@ -37,9 +68,20 @@ so `num_iters: 80` schedules five epochs.
 The default rank order, `tp-sp1-sp2-dp`, keeps each spatial group within one
 node. The trainer infers DP size from world size and the spatial mesh.
 
-Throughput measurements leave out epoch 1 and the profiled epoch.
-Replica speedup is `T_4nodes / T_1node`; efficiency is that ratio divided by 4.
-In the profiles, look for halo exchanges around the depthwise convolutions,
-shared-weight and DP reductions, and validation gathers.
+Recorded performance, leaving out epoch 1 and the profiled epoch:
+
+- GPU memory: 26.725 GB after the forward pass.
+- Throughput: 57.65 samples/sec across 16 GPUs.
+- Validation loss: 0.2241 in epoch 1, falling to 0.1131 in epoch 5.
+
+The four replicas give a 3.81× throughput increase over one replica, or
+95.3% scaling efficiency. Training and validation complete all five epochs.
+The local parameter count is still 57.948 M.
+
+In `convnext_sp4_dp4.0.nsys-rep`, the steps remain about 264 ms and have
+little space between them. Each replica keeps its spatial exchanges within
+one node; gradient synchronization also connects the four replicas.
+
+![ConvNeXt spatial and data parallel profile, four replicas retaining the same step duration](../../tutorial_images/convnext_sp4_dp4.png)
 
 The [runbook](../RUNBOOK.md#convnext) has the submission commands and output paths.

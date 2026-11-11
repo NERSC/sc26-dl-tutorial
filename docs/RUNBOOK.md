@@ -364,10 +364,11 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali_dp16/16GPU/convnext_dp16/out
 
 Profiles: `convnext_dp16.0.nsys-rep` through `convnext_dp16.15.nsys-rep`.
 
-### 6. Larger model, no spatial split — `short_mp`, 1 GPU
+### 6. Out of memory, no spatial split — `short_mp`, 1 GPU
 
 Patch 16, width 768, depth 12, batch 4. This uses `train_mp.py` with no split,
 BF16, fused Adam, DALI with two workers, and eager execution. Profiling is off.
+The training forward runs out of memory in the channel MLP's first linear layer.
 
 ```bash
 ENABLE_PROFILING=0 \
@@ -383,6 +384,7 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/convnext_unsplit/out.log`
 
 The same model and batch, split across four GPUs on one node. `sp1=4` divides
 the 256×256 feature grid into 64×256 tiles. Weights remain replicated.
+This run fits and completes training and validation.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4 \
