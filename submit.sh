@@ -29,7 +29,5 @@ srun -u --cpu-bind=none \
     --container-mounts="${DATADIR}:/data,${LOGDIR}:/logs" \
     --container-workdir="${SLURM_SUBMIT_DIR:-${PWD}}" \
     bash -c '
-    source export_DDP_vars.sh
-    export OMP_NUM_THREADS=1
     '"${PROFILE_CMD}"' python train.py "$@"
     ' bash "${args[@]}"
