@@ -1,22 +1,17 @@
-#!/bin/bash 
-#SBATCH -C gpu 
-#SBATCH -q shared
-#SBATCH -A dasrepo
-#SBATCH --cpus-per-task 32
+#!/bin/bash
+#SBATCH --cpus-per-task 24
 #SBATCH --gpus-per-task 1
 #SBATCH --gpu-bind none
 #SBATCH --time=00:30:00
-#SBATCH --image=nersc/pytorch:26.07.01
-#SBATCH --module=gpu,nccl-cu13-plugin
 #SBATCH -J vit-era5
 #SBATCH -o %x-%j.out
 
-DATADIR=${DATADIR:-/pscratch/sd/s/shas1693/data/sc26_tutorial_data}
-LOGDIR=${LOGDIR:-${SCRATCH}/sc26-dl-tutorial/logs}
+DATADIR=${DATADIR:-/fsx/datasets}
+LOGDIR=${LOGDIR:-${SCRATCH:-${HOME}}/sc26-dl-tutorial/logs}
+IMAGE=${IMAGE:-/scratch/containers/sc26-pytorch.sqsh}
 mkdir -p ${LOGDIR}
 args=("$@")
 
-export FI_MR_CACHE_MONITOR=userfaultfd
 export HDF5_USE_FILE_LOCKING=FALSE
 export OMP_NUM_THREADS=1
 
@@ -24,20 +19,19 @@ export OMP_NUM_THREADS=1
 if [ "${ENABLE_PROFILING:-0}" -eq 1 ]; then
     echo "Enabling profiling..."
     NSYS_ARGS="--trace=cuda,cublas,nvtx --kill none -c cudaProfilerApi --capture-range-end=stop -f true --trace-fork-before-exec=true"
-    NSYS_OUTPUT=${LOGDIR}/${PROFILE_OUTPUT:-"profile"}.%q{SLURM_PROCID}
+    NSYS_OUTPUT=/logs/${PROFILE_OUTPUT:-"profile"}.%q{SLURM_PROCID}
     export PROFILE_CMD="nsys profile $NSYS_ARGS -o $NSYS_OUTPUT"
 fi
 
-export MASTER_ADDR=$(hostname)
-
-# Reversing order of GPUs to match default CPU affinities from Slurm
-export CUDA_VISIBLE_DEVICES=3,2,1,0
+export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
 
 set -x
-srun -u shifter -V ${DATADIR}:/data -V ${LOGDIR}:/logs \
+srun -u --cpu-bind=none \
+    --container-image="${IMAGE}" \
+    --container-mounts="${DATADIR}:/data,${LOGDIR}:/logs" \
+    --container-workdir="${SLURM_SUBMIT_DIR:-${PWD}}" \
     bash -c '
     source export_DDP_vars.sh
-    unset NCCL_NET_PLUGIN
     export OMP_NUM_THREADS=1
     '"${PROFILE_CMD}"' python train.py "$@"
     ' bash "${args[@]}"
