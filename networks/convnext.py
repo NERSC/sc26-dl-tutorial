@@ -61,10 +61,12 @@ class ConvNeXtBlock(nn.Module):
 
     def forward(self, x):
         residual = x
-        x = self.depthwise(x).permute(0, 2, 3, 1)
-        x = self.mlp(self.norm(x).to(x.dtype))
-        x = (x * self.gamma.to(x.dtype)).permute(0, 3, 1, 2)
-        return residual + x
+        with torch.cuda.nvtx.range("depthwise convolution"):
+            x = self.depthwise(x).permute(0, 2, 3, 1)
+        with torch.cuda.nvtx.range("mlp"):
+            x = self.mlp(self.norm(x).to(x.dtype))
+            x = (x * self.gamma.to(x.dtype)).permute(0, 3, 1, 2)
+            return residual + x
 
 
 class ConvNeXtField(nn.Module):
