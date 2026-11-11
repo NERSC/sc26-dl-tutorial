@@ -86,14 +86,35 @@ class MLP(nn.Module):
         return x
 
 
+def _context_pad_length(token_counts):
+    """Even length TE context parallelism requires, or None when every rank already has it."""
+    if comm.get_size("tp-sp1-sp2") <= 1 or not token_counts:
+        return None
+    target = max(token_counts)
+    if target % 2:
+        target += 1
+    if target == min(token_counts):
+        return None
+    return target
+
+
 class Attention(nn.Module):
     """Transformer Engine attention over locally padded token sequences."""
 
-    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0):
+    def __init__(
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=False,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        spatial_shapes=None,
+    ):
         super().__init__()
         assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
+        self.pad_to = _context_pad_length(spatial_shapes)
 
         # do we need this? will te default to sequential from the size?
         if comm.get_size("tp-sp1-sp2") > 1:
@@ -197,30 +218,16 @@ class Attention(nn.Module):
         }
 
     def _pad(self, x):
-        B, N, C = x.shape
-        if comm.get_size("tp-sp1-sp2") > 1:
-            N_tensor = torch.tensor([N], dtype=torch.long, device=x.device)
-            N_list = [
-                torch.zeros_like(N_tensor)
-                for _ in range(comm.get_size("tp-sp1-sp2"))
-            ]
-            torch.distributed.all_gather(
-                N_list, N_tensor, group=comm.get_group("tp-sp1-sp2")
-            )
-            max_N = max([n.item() for n in N_list])
-            if max_N % 2 != 0:
-                max_N += 1
-            if N < max_N:
-                pad_size = max_N - N
-                padding = torch.zeros(B, pad_size, C, dtype=x.dtype, device=x.device)
-                x = torch.cat([x, padding], dim=1)
-                N = max_N
-        return x
+        if self.pad_to is None or x.shape[1] >= self.pad_to:
+            return x
+        pad_size = self.pad_to - x.shape[1]
+        padding = x.new_zeros(x.shape[0], pad_size, x.shape[2])
+        return torch.cat([x, padding], dim=1)
 
     def forward(self, x):
         B, N, C = x.shape
 
-        x = self._pad(x) # pad if needed for TE to work with odd N or uneven splits
+        x = self._pad(x)
         N_max = x.shape[1]
         # Compute q, k, v projections
         q = self.q(x).reshape(B, N_max, self.num_heads_local, self.head_dim).contiguous()
@@ -230,7 +237,8 @@ class Attention(nn.Module):
         x = self.attention(
                 q, k, v,
             )
-        x = x[:, :N, :] # unpad if needed
+        if N_max != N:
+            x = x[:, :N, :]
         x = x.reshape(B, N, self.num_heads_local * self.head_dim)
 
         x = self.proj(x)
@@ -291,6 +299,7 @@ class Block(nn.Module):
         attn_drop=0.0,
         act_layer=nn.GELU,
         norm_layer=LayerNorm,
+        spatial_shapes=None,
     ):
         super().__init__()
 
@@ -309,6 +318,7 @@ class Block(nn.Module):
             qkv_bias=qkv_bias,
             attn_drop=attn_drop,
             proj_drop=drop,
+            spatial_shapes=spatial_shapes,
         )
         self.mlp = MLP(
             in_features=dim,
@@ -318,9 +328,11 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        y = self.attn(self.norm1(x))
-        x = x + y
-        x = x + self.mlp(self.norm2(x))
+        with torch.cuda.nvtx.range("attention"):
+            y = self.attn(self.norm1(x))
+            x = x + y
+        with torch.cuda.nvtx.range("mlp"):
+            x = x + self.mlp(self.norm2(x))
         return x
 
 
@@ -423,6 +435,7 @@ class VisionTransformer(nn.Module):
                     drop=drop_rate,
                     attn_drop=attn_drop_rate,
                     norm_layer=norm_layer,
+                    spatial_shapes=self.spatial_shapes,
                 )
                 for i in range(depth)
             ]
