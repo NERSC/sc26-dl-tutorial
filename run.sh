@@ -6,7 +6,7 @@
 #   ./run.sh --yaml_config ./config/ViT.yaml --config short --run_num short
 
 DATADIR=${DATADIR:-/fsx/datasets}
-LOGDIR=${LOGDIR:-${SCRATCH:-${HOME}}/sc26-dl-tutorial/logs}
+LOGDIR=${LOGDIR:-${HOME}/sc26-dl-tutorial/logs}
 IMAGE=${IMAGE:-/scratch/containers/sc26-pytorch.sqsh}
 NNODES=${NNODES:-1}
 NGPU=${NGPU:-1}

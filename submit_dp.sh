@@ -7,7 +7,7 @@
 #SBATCH -o %x-%j.out
 
 DATADIR=${DATADIR:-/fsx/datasets}
-LOGDIR=${LOGDIR:-${SCRATCH:-${HOME}}/sc26-dl-tutorial/logs}
+LOGDIR=${LOGDIR:-${HOME}/sc26-dl-tutorial/logs}
 IMAGE=${IMAGE:-/scratch/containers/sc26-pytorch.sqsh}
 mkdir -p ${LOGDIR}
 args=("$@")
