@@ -32,7 +32,6 @@ srun -u --cpu-bind=none \
     --container-workdir="${SLURM_SUBMIT_DIR:-${PWD}}" \
     bash -c '
     source export_DDP_vars.sh
-    # EFA (FI_PROVIDER=efa, FI_EFA_USE_DEVICE_RDMA=1) is set by the cluster Enroot config
     export OMP_NUM_THREADS=1
     '"${PROFILE_CMD}"' python train.py "$@"
     ' bash "${args[@]}"
