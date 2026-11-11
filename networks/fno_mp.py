@@ -168,9 +168,11 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        x = self.act(self.spectral(x) + self.skip(x))
+        with torch.cuda.nvtx.range("spectral"):
+            x = self.act(self.spectral(x) + self.skip(x))
         if self.mlp is not None:
-            x = x + self.mlp(x)
+            with torch.cuda.nvtx.range("mlp"):
+                x = x + self.mlp(x)
         return x
 
 

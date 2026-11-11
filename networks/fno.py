@@ -178,9 +178,11 @@ class Block(nn.Module):
         self.mlp = MLP(dim, int(dim * mlp_ratio), dim, act_layer=act_layer) if mlp_ratio > 0 else None
 
     def forward(self, x):
-        x = self.act(self.spectral(x) + self.skip(x))
+        with torch.cuda.nvtx.range("spectral"):
+            x = self.act(self.spectral(x) + self.skip(x))
         if self.mlp is not None:
-            x = x + self.mlp(x)
+            with torch.cuda.nvtx.range("mlp"):
+                x = x + self.mlp(x)
         return x
 
 

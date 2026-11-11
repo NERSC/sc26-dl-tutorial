@@ -104,7 +104,7 @@ opt_big: &opt_big
 short_mp: &short_mp
   <<: *short_opt_big
   global_batch_size: 4
-  num_data_workers: 2
+  num_data_workers: 4
   embed_dim: 260
   depth: 4
   downsample: 2
@@ -112,3 +112,6 @@ short_mp: &short_mp
   amp_mode: bf16
   enable_jit: false
   enable_fused: false
+  limit_nsamples: 256
+  limit_nsamples_val: 32
+  num_iters: 1600
