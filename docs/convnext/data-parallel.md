@@ -35,12 +35,7 @@ run because each GPU still holds the same model and local batch of four.
 
 ## Four GPUs
 
-DP4 reaches 59.97 samples/sec versus 11.26 on one GPU. The 5.33× increase is
-an end-to-end result: the single-GPU DALI baseline still has input stalls,
-and the gaps are shorter in this DP4 capture. The training steps themselves
-remain around 154–160 ms in the two profiles.
-
-![ConvNeXt DP4 rank 0, short training steps with smaller input gaps](../../tutorial_images/convnext_dp4.png)
+![ConvNeXt DP4 rank 0 training profile](../../tutorial_images/convnext_dp4.png)
 
 Profile: `convnext_dp4.0.nsys-rep`. Gradient synchronization adds NCCL calls
 during backward. Training and validation complete all five epochs, with
