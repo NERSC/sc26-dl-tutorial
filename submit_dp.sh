@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --ntasks-per-node 1
-#SBATCH --cpus-per-task 48
-#SBATCH --gpus-per-node 4
+#SBATCH --cpus-per-task 96
+#SBATCH --gpus-per-node 8
 #SBATCH --time=00:30:00
 #SBATCH -J vit-era5-dp
 #SBATCH -o %x-%j.out
@@ -26,7 +26,7 @@ fi
 
 export MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
 export MASTER_PORT=$((29500 + SLURM_JOB_ID % 2000))
-NPROC_PER_NODE=${NPROC_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
+NPROC_PER_NODE=${NPROC_PER_NODE:-${SLURM_GPUS_ON_NODE:-8}}
 
 set -x
 srun -u --ntasks-per-node=1 --cpu-bind=none \

@@ -39,7 +39,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/dali/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_dp \
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num dp
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num dp
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp/4GPU/dp/out.log`
@@ -51,7 +51,7 @@ Profiles: `vit_dp.0.nsys-rep` through `vit_dp.3.nsys-rep`.
 Same 4 GPUs as the first data-parallel run. `global_batch_size: 4` makes the local batch 1. The ViT is larger: `patch_size: 16`, `embed_dim: 1024`. This one fits. No profile.
 
 ```bash
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/big/out.log`
@@ -61,7 +61,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/big/out.log`
 Same model and the same local batch of 1. The global batch is 16, and `lr` is `1e-3`, from `5e-4 * sqrt(16 / 4)`. No profile.
 
 ```bash
-sbatch -N 4 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
+sbatch -N 2 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/big16/out.log`
@@ -174,7 +174,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali_big \
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big_profile
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big_profile
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`
@@ -186,7 +186,7 @@ Profiles: `swin_short_opt_dali_big.0.nsys-rep` through `swin_short_opt_dali_big.
 Same model and the same local batch of 1. The global batch is 16, and `lr` is `1e-3`, from `5e-4 * sqrt(16 / 4)`. No profile.
 
 ```bash
-sbatch -N 4 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big_dp16 --run_num swin_big16
+sbatch -N 2 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big_dp16 --run_num swin_big16
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`
@@ -258,7 +258,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`
@@ -270,7 +270,7 @@ Profiles: `fno_big.0.nsys-rep` through `fno_big.3.nsys-rep`.
 Same model and the same local batch of 1. The global batch is 16, and `lr` is `1e-3`, from `5e-4 * sqrt(16 / 4)`. No profile.
 
 ```bash
-sbatch -N 4 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
+sbatch -N 2 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`
@@ -344,7 +344,7 @@ Global batch 16, local batch 4. The learning rate is `1e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp4 \
-sbatch -N 1 --time=00:30:00 -J convnext_dp4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 -J convnext_dp4 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp4 --run_num convnext_dp4
 ```
 
@@ -360,7 +360,7 @@ Global batch 64, local batch 4. The learning rate is `2e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp16 \
-sbatch -N 4 --time=00:30:00 -J convnext_dp16 \
+sbatch -N 2 --time=00:30:00 -J convnext_dp16 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp16 --run_num convnext_dp16
 ```
 
@@ -377,11 +377,11 @@ five epochs. Check memory use and GPU activity in this run before scaling out.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big \
-sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_big \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 -J convnext_big \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_big --run_num convnext_big
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/convnext_big/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/convnext_big/out.log`
 
 Profiles: `convnext_big.0.nsys-rep` through `convnext_big.3.nsys-rep`.
 
@@ -393,11 +393,11 @@ five epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big16 \
-sbatch -q debug -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_big16 \
+sbatch -N 2 --time=00:30:00 -J convnext_big16 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_big_dp16 --run_num convnext_big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/convnext_big16/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/convnext_big16/out.log`
 
 Profiles: `convnext_big16.0.nsys-rep` through `convnext_big16.15.nsys-rep`.
 
