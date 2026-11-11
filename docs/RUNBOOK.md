@@ -91,6 +91,36 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/mp/out.log`
 
 Profiles: `vit_mp.0.nsys-rep` through `vit_mp.15.nsys-rep`.
 
+### 9. Transformer Engine, sequence sharded — `short_mp_te`, 16 GPUs
+
+Same model and mesh as the spatial run. `short_mp_te` sets `model_backend: transformer-engine`. `NVTE_BATCH_MHA_P2P_COMM=1` batches the context-parallel K/V send and recv. `sp1=4` shards the sequence inside the node, and `dp=4` keeps the local batch at 1.
+
+```bash
+NVTE_BATCH_MHA_P2P_COMM=1 \
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te \
+sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te \
+    --tp=1 --sp1=4 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`
+
+Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
+
+### 10. Transformer Engine, tensor parallel — `short_mp_te`, 16 GPUs
+
+Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across the four GPUs in the node. `1536` and the 16 heads divide by 4. Four nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+
+```bash
+CUDA_DEVICE_MAX_CONNECTIONS=1 \
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te_tp \
+sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te_tp \
+    --tp=4 --sp1=1 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`
+
+Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
+
 ---
 
 ## Swin
@@ -184,6 +214,8 @@ The throughput lines are in the training log and in the job output. Copy the `.n
 | `short_opt_dali_dp` | `tutorial_images/vit_dp.png` |
 | `short_opt_big` | `tutorial_images/vit_big.png` |
 | `short_mp` | `tutorial_images/vit_mp.png` |
+| `short_mp_te` | `tutorial_images/vit_te_sp.png` |
+| `short_mp_te` `tp=4` | `tutorial_images/vit_te_tp.png` |
 | `swin` `short` | `tutorial_images/swin_short_step.png` |
 | `swin` `short_opt` | `tutorial_images/swin_short_opt.png` |
 | `swin` `short_opt_dali` | `tutorial_images/swin_short_opt_dali.png` |

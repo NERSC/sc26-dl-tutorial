@@ -91,7 +91,7 @@ Shared weights must be initialized identically on every rank that holds them. If
 
 ## Transformer Engine
 
-When the network really is a stack of attention and MLP blocks on a 1D token sequence, [Transformer Engine](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/index.html) can own the sharding. The ViT flattens its patches into that kind of sequence, so [`networks/vit_te.py`](../../networks/vit_te.py) is a thin wrapper: pass the tensor-parallel group, and say whether the layer is column-parallel or row-parallel. TE shards the weight, inserts the matching collective, and fuses the epilogue.
+When the network really is a stack of attention and MLP blocks on a 1D token sequence, [Transformer Engine](https://docs.nvidia.com/deeplearning/transformer-engine/api/pytorch.html) can own the sharding. The ViT flattens its patches into that kind of sequence, so [`networks/vit_te.py`](../../networks/vit_te.py) is a thin wrapper: pass the tensor-parallel group, and say whether the layer is column-parallel or row-parallel. TE shards the weight, inserts the matching collective, and fuses the epilogue.
 
 ```python
 self.fc1 = te.Linear(
@@ -106,7 +106,7 @@ self.fc1 = te.Linear(
 )
 ```
 
-The [Linear signature](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/pytorch.html#transformer_engine.pytorch.Linear) lists the rest of the arguments. Self-attention is `te.DotProductAttention`. The heads are the tensor-parallel axis. See the call in [`networks/vit_te.py`](../../networks/vit_te.py). The [attention signature](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/api/pytorch.html#transformer_engine.pytorch.DotProductAttention) is the reference.
+The [Linear signature](https://docs.nvidia.com/deeplearning/transformer-engine/api/pytorch.html) lists the rest of the arguments. Self-attention is `te.DotProductAttention`. The heads are the tensor-parallel axis. See the call in [`networks/vit_te.py`](../../networks/vit_te.py). The [attention signature](https://docs.nvidia.com/deeplearning/transformer-engine/api/pytorch.html) is the reference.
 
 Swin, the FNO, and ConvNeXt do not look like that language-model block, so they stay on the custom modules above. Set `model_backend: transformer-engine` to select the ViT path. TE's context parallelism wants an even local sequence, and `vit_te.py` pads when the `sp1 × sp2` split is uneven. In a profile, TE's own NVTX ranges wrap each linear and the all-reduce that follows the row-parallel one. The column-parallel linear has no forward collective.
 
@@ -165,7 +165,34 @@ Attention keeps the query on this rank's tokens and all-gathers the keys and val
 
 ![ViT spatial profile, NCCL all-gather of keys and values in the forward](../../tutorial_images/vit_mp.png)
 
-Each YAML file will have a spatial-parallel block. `--order=sp1-tp-sp2-dp` keeps the spatial ranks adjacent when that axis is the wide one. Logs go to `<expdir>/<config>/<M>MP/<run_num>/`, with `M = tp × sp1 × sp2`.
+`short_mp_te` is that same model with `model_backend: transformer-engine`. The mesh is unchanged: `sp1=4` shards the sequence inside the node, and `dp=4` keeps the local batch at 1. `NVTE_BATCH_MHA_P2P_COMM=1` batches the context-parallel K/V send and recv.
+
+```bash
+NVTE_BATCH_MHA_P2P_COMM=1 \
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te \
+sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te \
+    --tp=1 --sp1=4 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`. Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
+
+![ViT Transformer Engine profile, K/V send/recv overlapped with flash attention](../../tutorial_images/vit_te_sp.png)
+
+The same config with tensor parallelism leaves the sequence whole. `tp=4` shards the heads and the MLP across the four GPUs in the node. `1536` and the 16 heads divide by 4. Four nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+
+```bash
+CUDA_DEVICE_MAX_CONNECTIONS=1 \
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te_tp \
+sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te_tp \
+    --tp=4 --sp1=1 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`. Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
+
+![ViT Transformer Engine profile, backward all-reduce overlapped with the weight-gradient GEMM](../../tutorial_images/vit_te_tp.png)
+
+Look for that overlap in the two profiles. In the sequence-sharded run it is the K/V P2P (`ncclDevKernel_SendRecv`) beside the flash-attention kernel. In the tensor-parallel run it is the backward all-reduce of the input gradient beside the weight-gradient GEMM.
+
 
 A few sizes have to divide evenly. Swin's `window_size` has to divide the patch grid on each spatial rank. The FNO's channel count has to be at least `sp1` and at least `sp2`. Transformer Engine wants an even local sequence, and [`networks/vit_te.py`](../../networks/vit_te.py) pads when `model_backend: transformer-engine` and the split is uneven. With ConvNeXt local reads, keep `sp2=1` so each rank reads whole rows.
 
