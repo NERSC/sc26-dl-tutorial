@@ -4,8 +4,6 @@
 
 Swin attends inside shifted windows instead of across every patch. The training budget matches the [ViT single-GPU page](../vit/single-gpu.md): `embed_dim: 512`, `depth: 12`, `patch_size: 32`, global batch 4, and 64 / 16 samples. `window_size: [16, 16]` divides the 128×128 patch grid. The knobs are the same three steps. [`config/swin.yaml`](../../config/swin.yaml) holds the blocks, and [`networks/swin.py`](../../networks/swin.py) is the model.
 
-The interactive commands are steps 1–3 under Swin in [RUNBOOK_run.md](../RUNBOOK_run.md).
-
 ## Profiling
 
 `train.py` wraps the host-to-device copy, the forward, and the optimizer step in the same NVTX ranges as the ViT. A profiled config still needs at least four epochs, because the capture is the fourth epoch.
@@ -56,6 +54,8 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt --run_num swin_opt
 ```
 
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/swin_opt/out.log`. Profile: `swin_short_opt.0.nsys-rep`.
+
 The first epoch pays for `torch.compile`. The next two are the steady rate:
 
 ```text
@@ -95,7 +95,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt_dali --run_num swin_dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`.
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`. Profile: `swin_short_opt_dali.0.nsys-rep`.
 
 The first epoch still pays for `torch.compile`. The next two are the steady rate:
 
@@ -123,7 +123,7 @@ Recorded performance, leaving out epoch 1 and the profiled epoch:
 - GPU memory: 26.664 GB peak, up from 21.113 GB with the PyTorch loader. Before the first step the device is already at 7.793 GB, against 1.226 GB for `short_opt`. That increase is DALI's copy of the prefetched batches.
 - Throughput: 12.49 samples/sec, up from 5.82 samples/sec.
 
-DALI closes those gaps. Its kernels run on a second stream while the step is in flight, and the steps sit against each other. This is the large jump, from 5.82 to 12.49 samples/sec.
+DALI closes most of those gaps. Its kernels run on a second stream while the step is in flight, and the steps sit against each other. This is the large jump, from 5.82 to 12.49 samples/sec. 
 
 ![Swin DALI profile, steps packed together with DALI on a second stream](../../tutorial_images/swin_short_opt_dali.png)
 

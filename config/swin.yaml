@@ -44,9 +44,9 @@ base: &base
 short: &short_ls
   <<: *base
   global_batch_size: 4
-  limit_nsamples: 64
-  limit_nsamples_val: 16
-  num_iters: 80
+  limit_nsamples: 256
+  limit_nsamples_val: 32
+  num_iters: 320
 
 short_opt:
   <<: *short_ls
@@ -75,7 +75,7 @@ short_opt_big: &short_opt_big
   <<: *short_ls
   global_batch_size: 4
   data_loader_config: 'dali'
-  num_data_workers: 2
+  num_data_workers: 4
   amp_mode: bf16
   enable_jit: true
   enable_fused: true
@@ -102,14 +102,24 @@ short_mp: &short_mp
   enable_jit: false
   enable_fused: true
 
-opt: &opt
+opt_big: &opt_big
   <<: *base
   data_loader_config: 'dali'
-  num_data_workers: 8
+  num_data_workers: 4
   amp_mode: fp16
-  num_iters: 30000
+  num_iters: 12000
   enable_jit: true
   enable_fused: true
+  patch_size: 16
+  embed_dim: 1024
+  depth: 12
+  global_batch_size: 4
+  lr: 5e-4
+
+opt_big_dp16:
+  <<: *opt_big
+  global_batch_size: 16
+  lr: 1e-3
 
 mp:
   <<: *base

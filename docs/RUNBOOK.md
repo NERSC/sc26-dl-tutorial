@@ -95,7 +95,7 @@ Profiles: `vit_mp.0.nsys-rep` through `vit_mp.15.nsys-rep`.
 
 ## Swin
 
-Same eight steps as the ViT, with the same `embed_dim`, `depth`, and `patch_size` at each step. `window_size: [16, 16]` stays, and 16 divides the patch grid of every step below. `run_num` is prefixed with `swin` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
+Same sizes as the ViT at each step, except Swin skips the local-batch-4 data-parallel run. The first data-parallel run is the larger model at local batch 1. `window_size: [16, 16]` stays, and 16 divides the patch grid of every step below. `run_num` is prefixed with `swin` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
 
 ### 1. Baseline — `short`, 1 GPU
 
@@ -124,30 +124,20 @@ sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt_dali
 
 Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`
 
-### 4. Data parallel — `short_opt_dali_dp`, 4 GPUs
+### 4. Large model, local batch 1 — `short_opt_big`, 4 GPUs
 
-Global batch 16, so the local batch stays 4. The learning rate stays `5e-4`.
-
-```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_dp \
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_dali_dp --run_num swin_dp
-```
-
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali_dp/4GPU/swin_dp/out.log`
-
-Profiles: `swin_dp.0.nsys-rep` through `swin_dp.3.nsys-rep`.
-
-### 5. Large model, local batch 1 — `short_opt_big`, 4 GPUs
-
-`patch_size: 16` and `embed_dim: 1024`, with `depth` still 12. The patch grid is 256×256, and `window_size` 16 divides it. Global batch 4 on 4 GPUs, so the local batch is 1. No profile.
+`patch_size: 16` and `embed_dim: 1024`, with `depth` still 12. The patch grid is 256×256, and `window_size` 16 divides it. Global batch 4 on 4 GPUs, so the local batch is 1.
 
 ```bash
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big
+ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali_big \
+sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big_profile
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big/out.log`
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`
 
-### 6. Large model, 16 GPUs — `short_opt_big_dp16`
+Profiles: `swin_short_opt_dali_big.0.nsys-rep` through `swin_short_opt_dali_big.3.nsys-rep`.
+
+### 5. Large model, 16 GPUs — `short_opt_big_dp16`
 
 Same model and the same local batch of 1. The global batch is 16, and `lr` is `1e-3`, from `5e-4 * sqrt(16 / 4)`. No profile.
 
@@ -157,7 +147,7 @@ sbatch -N 4 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_b
 
 Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`
 
-### 7. Out of memory, model parallel with no split — `short_mp`, 4 GPUs
+### 6. Out of memory, model parallel with no split — `short_mp`, 4 GPUs
 
 `patch_size: 16`, `embed_dim: 1536`, and `depth: 16`, local batch still 1. The patch grid is 256×256, which 16 divides. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU. This is the same size-up that ran out of memory for the ViT. Profiling stays off.
 
@@ -168,7 +158,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --
 
 Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`
 
-### 8. Model parallel — `short_mp`, 16 GPUs
+### 7. Model parallel — `short_mp`, 16 GPUs
 
 The same config, with the global batch still 4. `sp1=4` shards one spatial axis. The local grid is 64×256, and window 16 divides both sides. Four nodes leave `dp=4`, so the local batch stays 1.
 
@@ -197,6 +187,5 @@ The throughput lines are in the training log and in the job output. Copy the `.n
 | `swin` `short` | `tutorial_images/swin_short_step.png` |
 | `swin` `short_opt` | `tutorial_images/swin_short_opt.png` |
 | `swin` `short_opt_dali` | `tutorial_images/swin_short_opt_dali.png` |
-| `swin` `short_opt_dali_dp` | `tutorial_images/swin_dp.png` |
 | `swin` `short_opt_big` | `tutorial_images/swin_big.png` |
 | `swin` `short_mp` | `tutorial_images/swin_mp.png` |

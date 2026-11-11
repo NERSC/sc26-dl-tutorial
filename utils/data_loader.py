@@ -43,7 +43,7 @@ def get_data_loader(
         worker_init_fn=worker_init,
         drop_last=True,
         pin_memory=torch.cuda.is_available(),
-        persistent_workers=True,
+        persistent_workers=params.num_data_workers > 0,
     )
 
     if train:
