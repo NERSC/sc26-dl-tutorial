@@ -5,7 +5,8 @@
 Data parallelism still stores a full copy of the model and of the image on every GPU. At some point, as we grow the models, a local batch size of one also will not fit. `short_mp` is the next size up, `embed_dim: 1536` and `depth: 16`, with the same `patch_size: 16` and the same local batch of 1 (`global_batch_size: 4` on 4 GPUs). That step runs out of memory. Lowering the batch has nowhere left to go, so the replica itself has to be split. This is the typical way into model parallelism.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -112,7 +113,7 @@ Swin, the FNO, and ConvNeXt do not look like that language-model block, so they 
 
 ## Running a model-parallel job
 
-[`submit_mp.sh`](../../submit_mp.sh) runs [`train_mp.py`](../../train_mp.py) with four tasks per node. The mesh flags are the same for every network. `dp` is whatever GPUs remain.
+[`submit_mp.sh`](../../submit_mp.sh) runs [`train_mp.py`](../../train_mp.py) with eight tasks per node, one per GPU. The single-node examples override this to four tasks on four GPUs. The mesh flags are the same for every network. `dp` is whatever GPUs remain.
 
 ```text
 --tp      tensor-parallel size
@@ -127,11 +128,11 @@ sbatch --nodes=<nodes> ./submit_mp.sh \
     --tp=1 --sp1=4 --sp2=1
 ```
 
-For the ViT that ran out of memory, use 4 nodes. `sp1=4` shards the token sequence inside each node, and the global batch of 4 is split over `dp=4`, so the local batch stays 1.
+For the ViT that ran out of memory, use 2 nodes. `sp1=4` shards the token sequence inside each node, and the global batch of 4 is split over `dp=4`, so the local batch stays 1.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
     --tp=1 --sp1=4 --sp2=1
 ```
 
@@ -170,7 +171,7 @@ Attention keeps the query on this rank's tokens and all-gathers the keys and val
 ```bash
 NVTE_BATCH_MHA_P2P_COMM=1 \
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te \
     --tp=1 --sp1=4 --sp2=1
 ```
 
@@ -178,12 +179,12 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`. Profiles: `vit
 
 ![ViT Transformer Engine profile, K/V send/recv overlapped with flash attention](../../tutorial_images/vit_te_sp.png)
 
-The same config with tensor parallelism leaves the sequence whole. `tp=4` shards the heads and the MLP across the four GPUs in the node. `1536` and the 16 heads divide by 4. Four nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+The same config with tensor parallelism leaves the sequence whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 16 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
 
 ```bash
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te_tp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te_tp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te_tp \
     --tp=4 --sp1=1 --sp2=1
 ```
 
@@ -208,7 +209,8 @@ Picking `dp`, `tp`, and `sp1`/`sp2`, and which of them sits on the fast links in
 Activation checkpointing is an alternative that leaves the replica whole. `short_mp_ckpt` is the out-of-memory model with `activation_checkpoint: true`. Each block keeps its input, and the backward recomputes the block. One node, with tensor and spatial parallelism off:
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
     --tp=1 --sp1=1 --sp2=1
 ```
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --ntasks-per-node 4
-#SBATCH --cpus-per-task 24
+#SBATCH --ntasks-per-node 8
+#SBATCH --cpus-per-task 12
 #SBATCH --gpus-per-node 8
 #SBATCH --time=00:30:00
 #SBATCH -J vit-era5-mp

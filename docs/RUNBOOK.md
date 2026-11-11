@@ -71,7 +71,8 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/big16/out.log`
 `embed_dim: 1536` and `depth: 16`, local batch still 1. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU, so this is the out-of-memory run. Profiling stays off.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -79,11 +80,11 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/oom/out.log`
 
 ### 8. Model parallel — `short_mp`, 16 GPUs
 
-The same config as the failed run, with the global batch still 4. `sp1=4` shards the token sequence inside each node. Four nodes leave `dp=4`, so the local batch stays 1.
+The same config as the failed run, with the global batch still 4. `sp1=4` shards the token sequence inside each node. Two nodes leave `dp=4`, so the local batch stays 1.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num mp \
     --tp=1 --sp1=4 --sp2=1
 ```
 
@@ -98,7 +99,7 @@ Same model and mesh as the spatial run. `short_mp_te` sets `model_backend: trans
 ```bash
 NVTE_BATCH_MHA_P2P_COMM=1 \
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te \
     --tp=1 --sp1=4 --sp2=1
 ```
 
@@ -108,12 +109,12 @@ Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
 
 ### 10. Transformer Engine, tensor parallel — `short_mp_te`, 16 GPUs
 
-Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across the four GPUs in the node. `1536` and the 16 heads divide by 4. Four nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 16 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
 
 ```bash
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp_te_tp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te_tp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te --run_num mp_te_tp \
     --tp=4 --sp1=1 --sp2=1
 ```
 
@@ -126,7 +127,8 @@ Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
 Same model as the out-of-memory run, with `activation_checkpoint: true`. `--tp=1 --sp1=1 --sp2=1` leaves the replica whole on one node.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -194,7 +196,8 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`
 `patch_size: 16`, `embed_dim: 1536`, and `depth: 16`, local batch still 1. The patch grid is 256×256, which 16 divides. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU. This is the same size-up that ran out of memory for the ViT. Profiling stays off.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_oom \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -202,11 +205,11 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`
 
 ### 7. Model parallel — `short_mp`, 16 GPUs
 
-The same config, with the global batch still 4. `sp1=4` shards one spatial axis. The local grid is 64×256, and window 16 divides both sides. Four nodes leave `dp=4`, so the local batch stays 1.
+The same config, with the global batch still 4. `sp1=4` shards one spatial axis. The local grid is 64×256, and window 16 divides both sides. Two nodes leave `dp=4`, so the local batch stays 1.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_mp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_mp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_mp \
     --tp=1 --sp1=4 --sp2=1
 ```
 
@@ -277,7 +280,8 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`
 `embed_dim: 260` and `downsample: 2`, local batch still 1. The latent grid is 2048×2048. `--tp=1 --sp1=1 --sp2=1` leaves the whole field on every GPU. Profiling stays off.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -285,11 +289,11 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/fno_oom/out.log`
 
 ### 7. Model parallel — `short_mp`, 16 GPUs
 
-The same config, with the global batch still 4. `sp1=2` and `sp2=2` shard height and width inside each node, so the pencil-FFT all-to-alls stay on NVLink. Four nodes leave `dp=4`, and the local batch stays 1. Each rank's latent tile is 1024×1024. `--tp=1`.
+The same config, with the global batch still 4. `sp1=2` and `sp2=2` shard height and width inside each node, so the pencil-FFT all-to-alls stay on NVLink. Two nodes leave `dp=4`, and the local batch stays 1. Each rank's latent tile is 1024×1024. `--tp=1`.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_mp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_mp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_mp \
     --tp=1 --sp1=2 --sp2=2
 ```
 
@@ -388,7 +392,7 @@ This run fits and completes training and validation.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4 \
-sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_sp4 \
+sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --gpus-per-node=4 --time=00:30:00 -J convnext_sp4 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_sp4 \
     --tp=1 --sp1=4 --sp2=1
 ```
@@ -399,12 +403,12 @@ Profiles: `convnext_sp4.0.nsys-rep` through `convnext_sp4.3.nsys-rep`.
 
 ### 8. Spatial and data parallel — `short_mp_dp4`, 16 GPUs
 
-Four nodes hold four spatially sharded replicas (`dp=4`). Local batch stays 4,
+Two nodes hold four spatially sharded replicas (`dp=4`). Local batch stays 4,
 global batch becomes 16, and `lr=1e-3`. `num_iters: 80` schedules five epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4_dp4 \
-sbatch -q debug -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_sp4_dp4 \
+sbatch -q debug -N 2 -n 16 --ntasks-per-node=8 --time=00:30:00 -J convnext_sp4_dp4 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp_dp4 --run_num convnext_sp4_dp4 \
     --tp=1 --sp1=4 --sp2=1
 ```

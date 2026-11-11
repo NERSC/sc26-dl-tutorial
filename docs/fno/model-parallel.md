@@ -9,7 +9,8 @@ The mesh is the same one documented on the [ViT model-parallel page](../vit/mode
 `short_mp` is the size matched to the ViT's `short_mp`: `embed_dim: 260`, `depth: 4`, modes 32×32, 555.1M real parameters. `downsample: 2` puts the blocks on a 2048×2048 latent grid. Local batch 1. `--tp=1 --sp1=1 --sp2=1` leaves the whole field on every GPU. Profiling stays off.
 
 ```bash
-sbatch -N 1 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
+sbatch -N 1 --ntasks-per-node 4 --gpus-per-node 4 --cpus-per-task 24 \
+    ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
@@ -19,11 +20,11 @@ Submit this job.
 
 ## Spatial split
 
-`sp1=2` and `sp2=2` shard height and width inside each node, so the pencil-FFT all-to-alls stay on NVLink. Each rank's latent tile is 1024×1024. Four nodes leave `dp=4`, so the global batch of 4 keeps the local batch at 1. `--tp=1`.
+`sp1=2` and `sp2=2` shard height and width inside each node, so the pencil-FFT all-to-alls stay on NVLink. Each rank's latent tile is 1024×1024. Two nodes leave `dp=4`, so the global batch of 4 keeps the local batch at 1. `--tp=1`.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_mp \
-sbatch -N 4 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_mp \
+sbatch -N 2 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_mp \
     --tp=1 --sp1=2 --sp2=2
 ```
 

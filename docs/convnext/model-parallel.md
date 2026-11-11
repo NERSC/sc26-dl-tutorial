@@ -41,7 +41,7 @@ torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.50 GiB.
 
 ## Four-way spatial split
 
-`sp1=4` fits the same model and batch on one four-GPU node. It completes all
+`sp1=4` fits the same model and batch on four GPUs of one node. It completes all
 five epochs of training and validation. The local parameter count remains
 57.948 M, because spatial splitting keeps the weights replicated.
 
@@ -57,10 +57,10 @@ exchange, followed by communication during backward.
 
 ![ConvNeXt four-way spatial profile, consecutive steps with NCCL calls during the forward](../../tutorial_images/convnext_sp4.png)
 
-## Four replicas across four nodes
+## Four replicas across two nodes
 
 `short_mp_dp4` keeps the same model and `tp=1, sp1=4, sp2=1`. Sixteen GPUs
-leave `dp=4`: four replicas, each split across one node. Local batch stays 4
+leave `dp=4`: four replicas, each split across four GPUs of a node. Local batch stays 4
 and global batch becomes 16. The learning rate is `1e-3`, from
 `5e-4 * sqrt(16 / 4)`. There are 16 training and 2 validation batches per epoch,
 so `num_iters: 80` schedules five epochs.
