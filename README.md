@@ -91,7 +91,7 @@ One YAML file per network. A run is that file plus one named block:
 |---|---|
 | [`config/ViT.yaml`](config/ViT.yaml) | `short` (and `base` for a long run) |
 | [`config/swin.yaml`](config/swin.yaml) | `short` (and `base`) |
-| [`config/FNO.yaml`](config/FNO.yaml) | `short` (and `base`). `embed_dim` stays small: the blocks store activations on the full 4096 × 4096 grid. |
+| [`config/FNO.yaml`](config/FNO.yaml) | `short` (and `base`). `downsample: 4` runs the blocks on a 1024×1024 latent grid. |
 | [`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) | `small` |
 
 The same files will grow a matching block for the optimized loader, for data parallelism, and for spatial parallelism. The architecture pages point at those blocks as they are filled in.
@@ -146,7 +146,7 @@ One GPU, before adding any more.
 - Turn on workers, BF16, fused Adam, and `torch.compile` together.
 - Move the loader to DALI.
 
-[ViT](docs/vit/single-gpu.md) · [Swin](docs/swin/single-gpu.md) · FNO · ConvNeXt
+[ViT](docs/vit/single-gpu.md) · [Swin](docs/swin/single-gpu.md) · [FNO](docs/fno/single-gpu.md) · ConvNeXt
 
 ### 2. Scale with data parallelism until the local batch is 1
 
@@ -156,7 +156,7 @@ More GPUs, each still holding a full copy of the model.
 - Drop the local batch to 1 as the model gets larger.
 - Raise the learning rate with the global batch.
 
-[ViT](docs/vit/data-parallel.md) · [Swin](docs/swin/data-parallel.md) · FNO · ConvNeXt
+[ViT](docs/vit/data-parallel.md) · [Swin](docs/swin/data-parallel.md) · [FNO](docs/fno/data-parallel.md) · ConvNeXt
 
 ### 3. Scale with model parallelism
 
@@ -165,4 +165,4 @@ Larger models and inputs, once a local batch of 1 will not fit on the GPU.
 - Split one replica across GPUs, with tensor parallelism and spatial parallelism.
 - Shard the sequence so the step fits again.
 
-[ViT](docs/vit/model-parallel.md) · [Swin](docs/swin/model-parallel.md) · FNO · ConvNeXt
+[ViT](docs/vit/model-parallel.md) · [Swin](docs/swin/model-parallel.md) · [FNO](docs/fno/model-parallel.md) · ConvNeXt

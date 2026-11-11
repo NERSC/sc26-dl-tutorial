@@ -214,6 +214,89 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`
 
 Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
+---
+
+## FNO
+
+Same steps as the Swin. The widths are parameter-matched to the ViT, and `depth` stays 4 with modes 32×32. The small model is `embed_dim: 76` (47.4M) on a 1024×1024 latent grid (`downsample: 4`). The large model is `embed_dim: 163` (218.2M) on a 2048×2048 latent grid (`downsample: 2`). `short_mp` is `embed_dim: 260` (555.1M) on that same 2048 grid. `enable_fused` stays off, because fused Adam cannot update the complex spectral weights. `run_num` is prefixed with `fno` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
+
+### 1. Baseline — `short`, 1 GPU
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short \
+sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short --run_num fno
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/fno/out.log`
+
+### 2. Workers, BF16, torch.compile — `short_opt`, 1 GPU
+
+Two workers, BF16, and `torch.compile`. The loader is still PyTorch. Fused Adam stays off.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short_opt \
+sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short_opt --run_num fno_opt
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/fno_opt/out.log`
+
+### 3. DALI — `short_opt_dali`, 1 GPU
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short_opt_dali \
+sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short_opt_dali --run_num fno_dali
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`
+
+### 4. Large model, local batch 1 — `short_opt_big`, 4 GPUs
+
+`downsample: 2` and `embed_dim: 163`. The latent grid is 2048×2048. Global batch 4 on 4 GPUs, so the local batch is 1.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
+sbatch -N 1 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`
+
+Profiles: `fno_big.0.nsys-rep` through `fno_big.3.nsys-rep`.
+
+### 5. Large model, 16 GPUs — `short_opt_big_dp16`
+
+Same model and the same local batch of 1. The global batch is 16, and `lr` is `1e-3`, from `5e-4 * sqrt(16 / 4)`. No profile.
+
+```bash
+sbatch -N 4 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`
+
+### 6. Out of memory, model parallel with no split — `short_mp`, 4 GPUs
+
+`embed_dim: 260` and `downsample: 2`, local batch still 1. The latent grid is 2048×2048. `--tp=1 --sp1=1 --sp2=1` leaves the whole field on every GPU. Profiling stays off.
+
+```bash
+sbatch -N 1 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
+    --tp=1 --sp1=1 --sp2=1
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/fno_oom/out.log`
+
+### 7. Model parallel — `short_mp`, 16 GPUs
+
+The same config, with the global batch still 4. `sp1=2` and `sp2=2` shard height and width inside each node, so the pencil-FFT all-to-alls stay on NVLink. Four nodes leave `dp=4`, and the local batch stays 1. Each rank's latent tile is 1024×1024. `--tp=1`.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_mp \
+sbatch -N 4 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_mp \
+    --tp=1 --sp1=2 --sp2=2
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/fno_mp/out.log`
+
+Profiles: `fno_mp.0.nsys-rep` through `fno_mp.15.nsys-rep`.
+
 ## After a run
 
 The throughput lines are in the training log and in the job output. Copy the `.nsys-rep` files into `profiles/` so the reports stay with the tutorial. Save the Nsight screenshot as:
@@ -233,3 +316,8 @@ The throughput lines are in the training log and in the job output. Copy the `.n
 | `swin` `short_opt_dali` | `tutorial_images/swin_short_opt_dali.png` |
 | `swin` `short_opt_big` | `tutorial_images/swin_big.png` |
 | `swin` `short_mp` | `tutorial_images/swin_mp.png` |
+| `fno` `short` | `tutorial_images/fno_short_step.png` |
+| `fno` `short_opt` | `tutorial_images/fno_short_opt.png` |
+| `fno` `short_opt_dali` | `tutorial_images/fno_short_opt_dali.png` |
+| `fno` `short_opt_big` | `tutorial_images/fno_big.png` |
+| `fno` `short_mp` | `tutorial_images/fno_mp.png` |
