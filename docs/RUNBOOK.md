@@ -311,7 +311,7 @@ width 768, with `tp=1`.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_short \
-sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short \
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short --run_num convnext
 ```
 
@@ -321,7 +321,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/convnext/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_short_opt \
-sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_opt \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_opt \
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt --run_num convnext_opt
 ```
 
@@ -331,7 +331,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/convnext_opt/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_short_opt_dali \
-sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_opt_dali \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_opt_dali \
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali --run_num convnext_dali
 ```
 
@@ -344,7 +344,7 @@ Global batch 16, local batch 4. The learning rate is `1e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp4 \
-sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp4 \
+sbatch -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp4 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp4 --run_num convnext_dp4
 ```
 
@@ -360,7 +360,7 @@ Global batch 64, local batch 4. The learning rate is `2e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp16 \
-sbatch -q debug -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp16 \
+sbatch -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp16 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp16 --run_num convnext_dp16
 ```
 
@@ -376,7 +376,7 @@ The training forward runs out of memory in the channel MLP's first linear layer.
 
 ```bash
 ENABLE_PROFILING=0 \
-sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --gpus-per-node=1 --gpu-bind=none \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --gpus-per-node=1 --gpu-bind=none \
     --time=00:30:00 -J convnext_unsplit ./submit_mp.sh \
     --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_unsplit \
     --tp=1 --sp1=1 --sp2=1
@@ -392,7 +392,7 @@ This run fits and completes training and validation.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4 \
-sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --gpus-per-node=4 --time=00:30:00 -J convnext_sp4 \
+sbatch -N 1 -n 4 --ntasks-per-node=4 --gpus-per-node=4 --time=00:30:00 -J convnext_sp4 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_sp4 \
     --tp=1 --sp1=4 --sp2=1
 ```
@@ -408,7 +408,7 @@ global batch becomes 16, and `lr=1e-3`. `num_iters: 80` schedules five epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4_dp4 \
-sbatch -q debug -N 2 -n 16 --ntasks-per-node=8 --time=00:30:00 -J convnext_sp4_dp4 \
+sbatch -N 2 -n 16 --ntasks-per-node=8 --time=00:30:00 -J convnext_sp4_dp4 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp_dp4 --run_num convnext_sp4_dp4 \
     --tp=1 --sp1=4 --sp2=1
 ```
