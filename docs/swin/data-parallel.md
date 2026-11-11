@@ -13,7 +13,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali_big \
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big_profile
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`.
 
 Profiles: `swin_short_opt_dali_big.0.nsys-rep` through `swin_short_opt_dali_big.3.nsys-rep`.
 
@@ -53,7 +53,7 @@ The gradient all-reduces are NCCL kernels on their own stream, issued during the
 sbatch -N 4 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big_dp16 --run_num swin_big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`.
 
 After the first epoch the run holds 25.6 samples/sec, up from 6.66 on 4 GPUs. The forward peaks at 36.142 GB.
 

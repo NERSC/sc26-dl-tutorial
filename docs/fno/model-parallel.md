@@ -13,7 +13,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --r
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/fno_oom/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/fno_oom/out.log`.
 
 Submit this job.
 
@@ -27,6 +27,6 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --r
     --tp=1 --sp1=2 --sp2=2
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/fno_mp/out.log`. Profiles: `fno_mp.0.nsys-rep` through `fno_mp.15.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/fno_mp/out.log`. Profiles: `fno_mp.0.nsys-rep` through `fno_mp.15.nsys-rep`.
 
 Submit this job.

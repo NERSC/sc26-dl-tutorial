@@ -2,7 +2,7 @@
 
 `sbatch` commands that reproduce the README figures. Each command requests the job itself.
 
-Training arguments stay on the command line and are forwarded to `train.py` or `train_mp.py`. `ENABLE_PROFILING=1` profiles every rank. Reports land in `$SCRATCH/sc26-dl-tutorial/logs/` as `<name>.<rank>.nsys-rep`. Training logs are under that same directory, mounted in the container as `/logs`.
+Training arguments stay on the command line and are forwarded to `train.py` or `train_mp.py`. `ENABLE_PROFILING=1` profiles every rank. Reports land in `$HOME/sc26-dl-tutorial/logs/` as `<name>.<rank>.nsys-rep`. Training logs are under that same directory, mounted in the container as `/logs`.
 
 Override `DATADIR` or `LOGDIR` in the environment if the defaults in the scripts are not the ones you want.
 
@@ -15,7 +15,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short \
 sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short --run_num short
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/short/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/short/out.log`
 
 ### 2. Workers, BF16, fused Adam, torch.compile — `short_opt`, 1 GPU
 
@@ -24,7 +24,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short_opt \
 sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short_opt --run_num short_opt
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/short_opt/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/short_opt/out.log`
 
 ### 3. DALI — `short_opt_dali`, 1 GPU
 
@@ -33,7 +33,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short_opt_dali \
 sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short_opt_dali --run_num dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/dali/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/dali/out.log`
 
 ### 4. Data parallel — `short_opt_dali_dp`, 4 GPUs
 
@@ -42,7 +42,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_dp \
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num dp
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali_dp/4GPU/dp/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp/4GPU/dp/out.log`
 
 Profiles: `vit_dp.0.nsys-rep` through `vit_dp.3.nsys-rep`.
 
@@ -54,7 +54,7 @@ Same 4 GPUs as the first data-parallel run. `global_batch_size: 4` makes the loc
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/big/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/big/out.log`
 
 ### 6. Large model, 16 GPUs — `short_opt_big_dp16`
 
@@ -64,7 +64,7 @@ Same model and the same local batch of 1. The global batch is 16, and `lr` is `1
 sbatch -N 4 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/big16/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/big16/out.log`
 
 ### 7. Out of memory, model parallel with no split — `short_mp`, 4 GPUs
 
@@ -75,7 +75,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --r
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/oom/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/oom/out.log`
 
 ### 8. Model parallel — `short_mp`, 16 GPUs
 
@@ -87,7 +87,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --r
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/mp/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/mp/out.log`
 
 Profiles: `vit_mp.0.nsys-rep` through `vit_mp.15.nsys-rep`.
 
@@ -102,7 +102,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te 
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`
 
 Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
 
@@ -117,7 +117,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te 
     --tp=4 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`
 
 Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
 
@@ -130,7 +130,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckp
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_ckpt/1MP/ckpt/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_ckpt/1MP/ckpt/out.log`
 
 
 ---
@@ -146,7 +146,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short --run_num swin
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/swin/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/swin/out.log`
 
 ### 2. Workers, BF16, fused Adam, torch.compile — `short_opt`, 1 GPU
 
@@ -155,7 +155,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt --run_num swin_opt
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/swin_opt/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/swin_opt/out.log`
 
 ### 3. DALI — `short_opt_dali`, 1 GPU
 
@@ -164,7 +164,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali \
 sbatch -n 1 ./submit.sh --yaml_config ./config/swin.yaml --config short_opt_dali --run_num swin_dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/swin_dali/out.log`
 
 ### 4. Large model, local batch 1 — `short_opt_big`, 4 GPUs
 
@@ -175,7 +175,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=swin_short_opt_dali_big \
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big --run_num swin_big_profile
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/swin_big_profile/out.log`
 
 Profiles: `swin_short_opt_dali_big.0.nsys-rep` through `swin_short_opt_dali_big.3.nsys-rep`.
 
@@ -187,7 +187,7 @@ Same model and the same local batch of 1. The global batch is 16, and `lr` is `1
 sbatch -N 4 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_big_dp16 --run_num swin_big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`
 
 ### 6. Out of memory, model parallel with no split — `short_mp`, 4 GPUs
 
@@ -198,7 +198,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`
 
 ### 7. Model parallel — `short_mp`, 16 GPUs
 
@@ -210,7 +210,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`
 
 Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
@@ -227,7 +227,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short \
 sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short --run_num fno
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/fno/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/fno/out.log`
 
 ### 2. Workers, BF16, torch.compile — `short_opt`, 1 GPU
 
@@ -238,7 +238,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short_opt \
 sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short_opt --run_num fno_opt
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/fno_opt/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/fno_opt/out.log`
 
 ### 3. DALI — `short_opt_dali`, 1 GPU
 
@@ -247,7 +247,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short_opt_dali \
 sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short_opt_dali --run_num fno_dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`
 
 ### 4. Large model, local batch 1 — `short_opt_big`, 4 GPUs
 
@@ -258,7 +258,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`
 
 Profiles: `fno_big.0.nsys-rep` through `fno_big.3.nsys-rep`.
 
@@ -270,7 +270,7 @@ Same model and the same local batch of 1. The global batch is 16, and `lr` is `1
 sbatch -N 4 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`
 
 ### 6. Out of memory, model parallel with no split — `short_mp`, 4 GPUs
 
@@ -281,7 +281,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --r
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/fno_oom/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/fno_oom/out.log`
 
 ### 7. Model parallel — `short_mp`, 16 GPUs
 
@@ -293,7 +293,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --r
     --tp=1 --sp1=2 --sp2=2
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/fno_mp/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/fno_mp/out.log`
 
 Profiles: `fno_mp.0.nsys-rep` through `fno_mp.15.nsys-rep`.
 
@@ -311,7 +311,7 @@ sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short 
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short --run_num convnext
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/convnext/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/convnext/out.log`
 
 ### 2. Workers, BF16, fused Adam, torch.compile — `short_opt`, 1 GPU
 
@@ -321,7 +321,7 @@ sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt --run_num convnext_opt
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/convnext_opt/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/convnext_opt/out.log`
 
 ### 3. DALI — `short_opt_dali`, 1 GPU
 
@@ -331,7 +331,7 @@ sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali --run_num convnext_dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/convnext_dali/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/convnext_dali/out.log`
 
 ### 4. Data parallel — `short_opt_dali_dp4`, 4 GPUs
 
@@ -344,7 +344,7 @@ sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp4 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp4 --run_num convnext_dp4
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali_dp4/4GPU/convnext_dp4/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp4/4GPU/convnext_dp4/out.log`
 
 Profiles: `convnext_dp4.0.nsys-rep` through `convnext_dp4.3.nsys-rep`.
 
@@ -360,7 +360,7 @@ sbatch -q debug -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_dp16 
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp16 --run_num convnext_dp16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali_dp16/16GPU/convnext_dp16/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp16/16GPU/convnext_dp16/out.log`
 
 Profiles: `convnext_dp16.0.nsys-rep` through `convnext_dp16.15.nsys-rep`.
 
@@ -378,7 +378,7 @@ sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --gpus-per-node=1 --gpu-bind=none 
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/convnext_unsplit/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/convnext_unsplit/out.log`
 
 ### 7. Spatial parallel — `short_mp`, 4 GPUs
 
@@ -393,7 +393,7 @@ sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_sp4 \
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/convnext_sp4/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/convnext_sp4/out.log`
 
 Profiles: `convnext_sp4.0.nsys-rep` through `convnext_sp4.3.nsys-rep`.
 
@@ -409,7 +409,7 @@ sbatch -q debug -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_sp4_d
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_dp4/4MP/convnext_sp4_dp4/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_dp4/4MP/convnext_sp4_dp4/out.log`
 
 Profiles: `convnext_sp4_dp4.0.nsys-rep` through `convnext_sp4_dp4.15.nsys-rep`.
 

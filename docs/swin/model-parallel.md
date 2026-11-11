@@ -13,7 +13,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/swin_oom/out.log`.
 
 The model is built before the step fails. The log reports a local parameter count of 555.545 M.
 
@@ -34,7 +34,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`. Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`. Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
 `sp1=4` brings the local parameter count to 480.048 M. The first three epochs stay under 32 GB. Epoch 4 is the profiled epoch.
 

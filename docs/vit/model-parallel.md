@@ -174,7 +174,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te 
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`. Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`. Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
 
 ![ViT Transformer Engine profile, K/V send/recv overlapped with flash attention](../../tutorial_images/vit_te_sp.png)
 
@@ -187,7 +187,7 @@ sbatch -N 4 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_te 
     --tp=4 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`. Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te_tp/out.log`. Profiles: `vit_mp_te_tp.0.nsys-rep` through `vit_mp_te_tp.15.nsys-rep`.
 
 ![ViT Transformer Engine profile, backward all-reduce overlapped with the weight-gradient GEMM](../../tutorial_images/vit_te_tp.png)
 
@@ -212,7 +212,7 @@ sbatch -N 1 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckp
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp_ckpt/1MP/ckpt/out.log`. Profiling stays off.
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp_ckpt/1MP/ckpt/out.log`. Profiling stays off.
 
 The step is much slower, because every block runs again in the backward. A slower step can also cost more GPU hours than splitting the same model across more GPUs. There is a floor. The checkpoint still stores the weights, the input to each block, and the activations of the block being recomputed. Grow the model past that remainder and checkpointing cannot make the step fit.
 

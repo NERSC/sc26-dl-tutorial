@@ -13,7 +13,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
 sbatch -N 1 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`.
 
 Profiles: `fno_big.0.nsys-rep` through `fno_big.3.nsys-rep`.
 
@@ -25,7 +25,7 @@ Submit this job.
 sbatch -N 4 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`.
 
 Submit this job.
 

@@ -13,7 +13,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short \
 sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short --run_num fno
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short/1GPU/fno/out.log`. Profile: `fno_short.0.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/fno/out.log`. Profile: `fno_short.0.nsys-rep`.
 
 Submit this job.
 
@@ -26,7 +26,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short_opt \
 sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short_opt --run_num fno_opt
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt/1GPU/fno_opt/out.log`. Profile: `fno_short_opt.0.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/fno_opt/out.log`. Profile: `fno_short_opt.0.nsys-rep`.
 
 Submit this job.
 
@@ -39,7 +39,7 @@ ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_short_opt_dali \
 sbatch -n 1 ./submit.sh --yaml_config ./config/FNO.yaml --config short_opt_dali --run_num fno_dali
 ```
 
-Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`. Profile: `fno_short_opt_dali.0.nsys-rep`.
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`. Profile: `fno_short_opt_dali.0.nsys-rep`.
 
 Submit this job.
 
