@@ -9,7 +9,7 @@ The mesh is the same one documented on the [ViT model-parallel page](../vit/mode
 `short_mp` is the same size-up that ran out of memory for the ViT: `patch_size: 16`, `embed_dim: 1536`, `depth: 16`, local batch 1. The patch grid is 256×256, which 16 divides. `--tp=1 --sp1=1 --sp2=1` leaves the whole replica on every GPU. Window attention stores less activation memory than full attention. It is not enough: the forward still runs out of memory, in the local `torch.roll` inside `_distributed_roll`. With one spatial rank that roll never leaves the GPU. Profiling stays off.
 
 ```bash
-sbatch -N 1 --gpus-per-node 4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 \
     ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --run_num swin_oom \
     --tp=1 --sp1=1 --sp2=1
 ```

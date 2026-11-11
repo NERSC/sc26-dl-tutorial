@@ -9,7 +9,7 @@ The mesh is the same one documented on the [ViT model-parallel page](../vit/mode
 `short_mp` is the size matched to the ViT's `short_mp`: `embed_dim: 260`, `depth: 4`, modes 32×32, 555.1M real parameters. `downsample: 2` puts the blocks on a 2048×2048 latent grid. Local batch 1. `--tp=1 --sp1=1 --sp2=1` leaves the whole field on every GPU. Profiling stays off.
 
 ```bash
-sbatch -N 1 --gpus-per-node 4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 \
     ./submit_mp.sh --yaml_config ./config/FNO.yaml --config short_mp --run_num fno_oom \
     --tp=1 --sp1=1 --sp2=1
 ```

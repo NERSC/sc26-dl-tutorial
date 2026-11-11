@@ -5,7 +5,7 @@
 Data parallelism still stores a full copy of the model and of the image on every GPU. At some point, as we grow the models, a local batch size of one also will not fit. `short_mp` is the next size up, `embed_dim: 1536` and `depth: 16`, with the same `patch_size: 16` and the same local batch of 1 (`global_batch_size: 4` on 4 GPUs). That step runs out of memory. Lowering the batch has nowhere left to go, so the replica itself has to be split. This is the typical way into model parallelism.
 
 ```bash
-sbatch -N 1 --gpus-per-node 4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 \
     ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --run_num oom \
     --tp=1 --sp1=1 --sp2=1
 ```
@@ -209,7 +209,7 @@ Picking `dp`, `tp`, and `sp1`/`sp2`, and which of them sits on the fast links in
 Activation checkpointing is an alternative that leaves the replica whole. `short_mp_ckpt` is the out-of-memory model with `activation_checkpoint: true`. Each block keeps its input, and the backward recomputes the block. One node, with tensor and spatial parallelism off:
 
 ```bash
-sbatch -N 1 --gpus-per-node 4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 \
     ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp_ckpt --run_num ckpt \
     --tp=1 --sp1=1 --sp2=1
 ```
