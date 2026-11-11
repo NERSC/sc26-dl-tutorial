@@ -54,5 +54,27 @@ loss falls from 0.4162 to 0.2585. The larger global batch makes fewer optimizer
 updates over the same training samples, and this run uses the larger validation
 set described above.
 
+## A larger model at local batch 1
+
+`short_opt_big` uses patch 16, width 1024, and depth 12. The feature grid
+grows to 256×256. Global batch 4
+on four GPUs gives local batch 1. BF16, fused Adam, compilation, kernel 7,
+and DALI with four workers stay enabled.
+
+The larger model increases computation per sample, aiming to keep the GPU
+busy while the loader prepares the next batch. Check the memory reported in
+the log and the gaps between steps in `convnext_big.0.nsys-rep`; its fit and
+utilization still need to be measured on Perlmutter.
+
+| Config | GPUs | Local / global batch | Learning rate | Iterations / epochs |
+|---|---|---|---|---|
+| `short_opt_big` | 4 | 1 / 4 | `5e-4` | 320 / 5 |
+| `short_opt_big_dp16` | 16 | 1 / 16 | `1e-3` | 80 / 5 |
+
+Both use 256 training and 32 validation samples. The 16-GPU configuration
+keeps the same model and local batch, scaling the learning rate by
+`sqrt(16 / 4)`. Both runs capture epoch 4; check the four-GPU run before
+scaling to sixteen GPUs.
+
 The [runbook](../RUNBOOK.md#convnext) has the submission commands and output
 paths. Continue with [spatial parallelism](model-parallel.md).

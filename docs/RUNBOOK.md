@@ -300,8 +300,8 @@ Profiles: `fno_mp.0.nsys-rep` through `fno_mp.15.nsys-rep`.
 ## ConvNeXt
 
 The single-GPU ladder uses patch 32, width 512, depth 12, kernel 7, and batch 4.
-Data parallelism keeps local batch 4. Spatial parallelism uses patch 16 and
-width 768, with `tp=1`.
+Data parallelism starts at local batch 4, then uses a larger model at local
+batch 1. Spatial parallelism uses patch 16 and width 768, with `tp=1`.
 
 ### 1. Baseline — `short`, 1 GPU
 
@@ -364,7 +364,40 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_dali_dp16/16GPU/convnext_dp16/out
 
 Profiles: `convnext_dp16.0.nsys-rep` through `convnext_dp16.15.nsys-rep`.
 
-### 6. Out of memory, no spatial split — `short_mp`, 1 GPU
+### 6. Large model, local batch 1 — `short_opt_big`, 4 GPUs
+
+Patch 16, width 1024, depth 12, kernel 7. Global batch 4 makes the local batch
+1. BF16, fused Adam, compilation, and DALI with four workers remain enabled.
+The run uses 256 training and 32 validation samples, with 320 iterations for
+five epochs. Check memory use and GPU activity in this run before scaling out.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big \
+sbatch -q debug -N 1 -n 4 --ntasks-per-node=4 --time=00:30:00 -J convnext_big \
+    ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_big --run_num convnext_big
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big/4GPU/convnext_big/out.log`
+
+Profiles: `convnext_big.0.nsys-rep` through `convnext_big.3.nsys-rep`.
+
+### 7. Large model, 16 GPUs — `short_opt_big_dp16`
+
+Same model and local batch 1. Global batch 16, learning rate `1e-3`, from
+`5e-4 * sqrt(16 / 4)`. The sample counts stay the same; 80 iterations schedule
+five epochs.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big16 \
+sbatch -q debug -N 4 -n 16 --ntasks-per-node=4 --time=00:30:00 -J convnext_big16 \
+    ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_big_dp16 --run_num convnext_big16
+```
+
+Log: `$SCRATCH/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/convnext_big16/out.log`
+
+Profiles: `convnext_big16.0.nsys-rep` through `convnext_big16.15.nsys-rep`.
+
+### 8. Out of memory, no spatial split — `short_mp`, 1 GPU
 
 Patch 16, width 768, depth 12, batch 4. This uses `train_mp.py` with no split,
 BF16, fused Adam, DALI with two workers, and eager execution. Profiling is off.
@@ -380,7 +413,7 @@ sbatch -q debug -N 1 -n 1 --ntasks-per-node=1 --gpus-per-node=1 --gpu-bind=none 
 
 Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/1MP/convnext_unsplit/out.log`
 
-### 7. Spatial parallel — `short_mp`, 4 GPUs
+### 9. Spatial parallel — `short_mp`, 4 GPUs
 
 The same model and batch, split across four GPUs on one node. `sp1=4` divides
 the 256×256 feature grid into 64×256 tiles. Weights remain replicated.
@@ -397,7 +430,7 @@ Log: `$SCRATCH/sc26-dl-tutorial/logs/short_mp/4MP/convnext_sp4/out.log`
 
 Profiles: `convnext_sp4.0.nsys-rep` through `convnext_sp4.3.nsys-rep`.
 
-### 8. Spatial and data parallel — `short_mp_dp4`, 16 GPUs
+### 10. Spatial and data parallel — `short_mp_dp4`, 16 GPUs
 
 Four nodes hold four spatially sharded replicas (`dp=4`). Local batch stays 4,
 global batch becomes 16, and `lr=1e-3`. `num_iters: 80` schedules five epochs.
@@ -442,5 +475,7 @@ The throughput lines are in the training log and in the job output. Copy the `.n
 | `convnext` `short_opt_dali` | `tutorial_images/convnext_short_opt_dali.png` |
 | `convnext` `short_opt_dali_dp4` | `tutorial_images/convnext_dp4.png` |
 | `convnext` `short_opt_dali_dp16` | `tutorial_images/convnext_dp16.png` |
+| `convnext` `short_opt_big` | `tutorial_images/convnext_big.png` |
+| `convnext` `short_opt_big_dp16` | `tutorial_images/convnext_big16.png` |
 | `convnext` `short_mp` | `tutorial_images/convnext_sp4.png` |
 | `convnext` `short_mp_dp4` | `tutorial_images/convnext_sp4_dp4.png` |

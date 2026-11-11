@@ -83,6 +83,22 @@ short_opt_dali_dp16:
   lr: 2.0E-3
   limit_nsamples_val: 128  # Two validation batches per rank with local batch 4.
 
+# Larger model at local batch 1 on 4 GPUs.
+short_opt_big: &short_opt_big
+  <<: *short_opt_dali
+  patch_size: 16
+  embed_dim: 1024
+  depth: 12
+  global_batch_size: 4
+  num_iters: 320  # 5 * (256 / 4)
+
+# lr = 5e-4 * sqrt(16 / 4). Local batch stays 1 on 16 GPUs.
+short_opt_big_dp16:
+  <<: *short_opt_big
+  global_batch_size: 16
+  num_iters: 80  # 5 * (256 / 16)
+  lr: 1.0E-3
+
 # Spatial parallelism: compare 1MP with 4MP at batch 4 using train_mp.py
 # in both cases. tp=1 throughout.
 short_mp: &short_mp
