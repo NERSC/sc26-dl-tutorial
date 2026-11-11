@@ -60,7 +60,8 @@ exchange, followed by communication during backward.
 ## Four replicas across two nodes
 
 `short_mp_dp4` keeps the same model and `tp=1, sp1=4, sp2=1`. Sixteen GPUs
-leave `dp=4`: four replicas, each split across four GPUs of a node. Local batch stays 4
+leave `dp=4`: four replicas, each split across four GPUs, two replicas per
+8-GPU node. Local batch stays 4
 and global batch becomes 16. The learning rate is `1e-3`, from
 `5e-4 * sqrt(16 / 4)`. There are 16 training and 2 validation batches per epoch,
 so `num_iters: 80` schedules five epochs.

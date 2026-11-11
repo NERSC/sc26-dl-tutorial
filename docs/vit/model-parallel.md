@@ -128,7 +128,7 @@ sbatch --nodes=<nodes> ./submit_mp.sh \
     --tp=1 --sp1=4 --sp2=1
 ```
 
-For the ViT that ran out of memory, use 2 nodes. `sp1=4` shards the token sequence inside each node, and the global batch of 4 is split over `dp=4`, so the local batch stays 1.
+For the ViT that ran out of memory, use 2 nodes, 16 GPUs. `sp1=4` shards the token sequence inside each node, and each 8-GPU node holds two of those groups. The global batch of 4 is split over `dp=4`, so the local batch stays 1.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_mp \

@@ -11,7 +11,7 @@ settings: BF16 autocast, fused Adam, compilation, and DALI with four workers.
 |---|---|---|---|---|---|
 | `short_opt_dali` | 1 / 1 | 4 / 4 | `5e-4` | 64 / 8 | 320 |
 | `short_opt_dali_dp4` | 1 / 4 | 4 / 16 | `1e-3` | 16 / 2 | 80 |
-| `short_opt_dali_dp16` | 4 / 16 | 4 / 64 | `2e-3` | 4 / 2 | 20 |
+| `short_opt_dali_dp16` | 2 / 16 | 4 / 64 | `2e-3` | 4 / 2 | 20 |
 
 The learning rate is `5e-4 * sqrt(global_batch / 4)`: factors 2 and 4 at
 global batches 16 and 64. Each run covers five scheduled epochs, with a cosine
@@ -47,7 +47,7 @@ validation loss falling from 0.2786 to 0.1238.
 Each rank runs four training steps per epoch. The visible steps in
 `convnext_dp16.0.nsys-rep` are closely packed, at about 159–162 ms each.
 
-![ConvNeXt DP16 rank 0, consecutive training steps across four nodes](../../tutorial_images/convnext_dp16.png)
+![ConvNeXt DP16 rank 0, consecutive training steps across two nodes](../../tutorial_images/convnext_dp16.png)
 
 This run also completes five epochs of training and validation. Validation
 loss falls from 0.4162 to 0.2585. The larger global batch makes fewer optimizer
@@ -64,7 +64,7 @@ and DALI with four workers stay enabled.
 The larger model increases computation per sample, aiming to keep the GPU
 busy while the loader prepares the next batch. Check the memory reported in
 the log and the gaps between steps in `convnext_big.0.nsys-rep`; its fit and
-utilization still need to be measured on Perlmutter.
+utilization still need to be measured on the AWS cluster.
 
 | Config | GPUs | Local / global batch | Learning rate | Iterations / epochs |
 |---|---|---|---|---|

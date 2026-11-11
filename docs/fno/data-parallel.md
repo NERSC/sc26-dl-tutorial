@@ -2,7 +2,7 @@
 
 [Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Model parallel](model-parallel.md)
 
-Each GPU still holds a full copy of the FNO and a different slice of the batch. The wiring is the same as the [ViT data-parallel page](../vit/data-parallel.md): [`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) under `torchrun` with four GPUs per node, and `DistributedDataParallel` averages the gradients. This page starts at the larger model with local batch 1.
+Each GPU still holds a full copy of the FNO and a different slice of the batch. The wiring is the same as the [ViT data-parallel page](../vit/data-parallel.md): [`submit_dp.sh`](../../submit_dp.sh) runs [`train.py`](../../train.py) under `torchrun`, one process per GPU, and `DistributedDataParallel` averages the gradients. This page starts at the larger model with local batch 1.
 
 ## A larger model at local batch 1
 
@@ -10,7 +10,7 @@ Each GPU still holds a full copy of the FNO and a different slice of the batch. 
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big --run_num fno_big
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/fno_big/out.log`.
@@ -22,7 +22,7 @@ Submit this job.
 `short_opt_big_dp16` keeps that local batch of 1 and uses 16 GPUs, so the global batch is 16. The learning rate follows the square-root rule, from `5e-4` to `1e-3`.
 
 ```bash
-sbatch -N 4 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
+sbatch -N 2 ./submit_dp.sh --yaml_config ./config/FNO.yaml --config short_opt_big_dp16 --run_num fno_big16
 ```
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/fno_big16/out.log`.

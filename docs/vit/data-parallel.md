@@ -6,13 +6,17 @@ The [single-GPU step](single-gpu.md) is in good shape. The next gain is more GPU
 
 ## How the job is wired
 
-[`submit_dp.sh`](../../submit_dp.sh) starts one [`torchrun`](https://pytorch.org/docs/stable/elastic/run.html) per node, and `torchrun` starts four copies of [`train.py`](../../train.py), one process per GPU. `-N` is the number of nodes, so one node is 4 GPUs and four nodes are 16.
+[`submit_dp.sh`](../../submit_dp.sh) starts one [`torchrun`](https://pytorch.org/docs/stable/elastic/run.html) per node, and `torchrun` starts one copy of [`train.py`](../../train.py) per GPU. Each node has 8 GPUs, and the jobs here use 1, 4, or 16 of them. A 4-GPU job is one node with `--gpus-per-node 4 --cpus-per-task 48`, and `torchrun` starts four processes to match. A 16-GPU job is `-N 2`, two nodes at the default 8 GPUs each.
 
 ```bash
-sbatch -N <nodes> ./submit_dp.sh --yaml_config ./config/ViT.yaml --config <name>
+# 4 GPUs, one node
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config <name>
+
+# 16 GPUs, two nodes of 8
+sbatch -N 2 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config <name>
 ```
 
-*Why one process per GPU, rather than one process per node that owns all four devices?*
+*Why one process per GPU, rather than one process per node that owns all of its GPUs?*
 
 DDP can form its process group in several ways. This code uses environment variables. The `torchrun` instances on the nodes rendezvous at the first node of the job (`--rdzv_endpoint`), agree on the global layout, and give each worker its `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, and the master address and port. Near the bottom of `train.py`, `torch.distributed.init_process_group` reads those and brings NCCL up.
 
@@ -46,7 +50,7 @@ Each network's file will have a data-parallel block of this shape. In [`config/V
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_dp \
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num dp
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_dali_dp --run_num dp
 ```
 
 The first epoch pays for `torch.compile`. Four GPUs and a global batch of 16 turn one epoch into four steps, so the same 80 iterations run for 20 epochs. Epochs 2 and 3 are the steady rate:
@@ -84,7 +88,7 @@ Profile every rank. The gradient all-reduces are NCCL kernels on their own strea
 Typically, as model sizes or activation sizes grow, we can drop the local batch size to keep the step fit. In `short_opt_big`, the ViT grows to `patch_size: 16` and `embed_dim: 1024`. We can drop the local batch size to 1 and keep the step fit on 4 GPUs with a global batch of 4. This is a common pattern in training larger models. 
 
 ```bash
-sbatch -N 1 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
 ```
 
 At the last epoch the 4-GPU run is at 0.837 samples/sec.
@@ -92,7 +96,7 @@ At the last epoch the 4-GPU run is at 0.837 samples/sec.
 `short_opt_big_dp16` keeps that local batch of 1 and uses 16 GPUs, so the global batch is 16. We typically do this to train faster (and on larger datasets) The learning rate follows the square-root rule, from `5e-4` to `1e-3` to compensate for the larger global batch.
 
 ```bash
-sbatch -N 4 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
+sbatch -N 2 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
 ```
 
 We observe a throughput of 3.19 samples/sec and hence a larger throughout for data parallel scaling.
