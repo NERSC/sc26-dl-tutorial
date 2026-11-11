@@ -5,7 +5,7 @@ base: &base
   # Parameter-matched to the ViT base (embed_dim 512, depth 12, patch 32: 48.3M).
   # embed 76, depth 4, modes 32x32: 47.4M real parameters. A complex spectral weight counts as two.
   embed_dim: 76
-  depth: 4
+  depth: 8
   dropout: 0.0
   modes_kh: 32 # retained wavenumbers in h, after truncation (None: all)
   modes_kw: 32 # retained wavenumbers in w
@@ -19,7 +19,7 @@ base: &base
   # Training config
   img_size: [4096, 4096]
   dt: 1
-  global_batch_size: 4 # number of samples per training batch
+  global_batch_size: 1 # full-grid lift is FP32 even under BF16; batch 4 does not fit in 40 GB
   num_iters: 30000
   amp_mode: none # none or bf16; not fp16: its loss scaling cannot unscale the complex spectral weights
   enable_fused: false # fused Adam does not support the complex spectral weights
@@ -50,7 +50,7 @@ short: &short_ls
   <<: *base
   limit_nsamples: 64
   limit_nsamples_val: 16
-  num_iters: 80
+  num_iters: 400
 
 # add optimization flags
 short_opt:
@@ -71,10 +71,10 @@ short_opt_dali: &short_opt_dali
 
 short_opt_dali_dp:
   <<: *short_opt_dali
-  global_batch_size: 16
+  global_batch_size: 4
 
-# Parameter-matched to the ViT short_opt_big (embed_dim 1024, depth 12, patch 16: 219.3M).
-# embed 163, depth 4, modes 32x32, downsample 2: 218.2M. Latent grid 2048x2048.
+# The ViT short_opt_big match is embed 163 (218.2M). That forward did not fit on one GPU
+# at local batch 1, so the width is 96 (75.9M). Latent grid stays 1024x1024.
 short_opt_big: &short_opt_big
   <<: *short_ls
   global_batch_size: 4
@@ -83,8 +83,8 @@ short_opt_big: &short_opt_big
   amp_mode: bf16
   enable_jit: true
   enable_fused: false
-  downsample: 2
-  embed_dim: 163
+  downsample: 4
+  embed_dim: 96
 
 # lr = 5e-4 * sqrt(16 / 4) = 1e-3.
 short_opt_big_dp16:
@@ -100,13 +100,14 @@ opt_big: &opt_big
   num_iters: 30000
 
 # Parameter-matched to the ViT short_mp (embed_dim 1536, depth 16, patch 16: 555.5M).
-# embed 260, depth 4, modes 32x32, downsample 2: 555.1M. Latent grid 2048x2048.
+# embed 260, depth 4, modes 32x32, downsample 2: 555.1M. Latent grid 2048x2048, sharded over sp1 x sp2.
 short_mp: &short_mp
   <<: *short_opt_big
   global_batch_size: 4
   num_data_workers: 2
   embed_dim: 260
   depth: 4
+  downsample: 2
   data_loader_config: 'dali'
   amp_mode: bf16
   enable_jit: false

@@ -6,7 +6,7 @@ Each GPU still holds a full copy of the FNO and a different slice of the batch. 
 
 ## A larger model at local batch 1
 
-`short_opt_big` is the size-up matched to the ViT's `short_opt_big`: `embed_dim: 163`, `depth: 4`, modes 32×32, 218.2M real parameters. `downsample: 2` runs the blocks on a 2048×2048 latent grid. Global batch 4 on 4 GPUs, so the local batch is 1. Profile every rank.
+`short_opt_big` widens the small model to `embed_dim: 96` (75.9M). The ViT match is 163 channels and 218.2M, and that forward does not fit at local batch 1. `downsample: 4` runs the blocks on a 1024×1024 latent grid. Global batch 4 on 4 GPUs, so the local batch is 1. Profile every rank.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
