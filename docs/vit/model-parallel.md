@@ -13,7 +13,7 @@ sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 \
 The model is built before the step fails. The log reports a local parameter count of 555.545 M.
 
 ```text
-2026-11-09 21:03:09,311 - root - INFO - Local parameter count: 555.545 M
+2026-11-12 02:09:52,526 - root - INFO - Local parameter count: 555.545 M
 ```
 
 The forward then fails in `F.linear` inside the pointwise linear:
@@ -136,33 +136,35 @@ sbatch -N 2 ./submit_mp.sh --yaml_config ./config/ViT.yaml --config short_mp --r
     --tp=1 --sp1=4 --sp2=1
 ```
 
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/mp/out.log`. Profiles: `vit_mp.0.nsys-rep` through `vit_mp.15.nsys-rep`.
+
 `sp1=4` brings the local parameter count to 480.048 M. The first three epochs stay under 40 GB. Epoch 4 is the profiled epoch.
 
 ```text
-2026-11-09 21:13:17,782 - root - INFO - Starting Training Loop...
-2026-11-09 21:13:24,538 - root - INFO -  Memory usage after forward pass: 33.72662353515625 GB.
-2026-11-09 21:14:04,172 - root - INFO - Time taken for epoch 1 is 38.818769 sec, avg 1.545644 samples/sec
-2026-11-09 21:14:04,177 - root - INFO -   Avg train loss=0.606727
-2026-11-09 21:14:04,188 - root - INFO -   Avg val loss=0.3623535633087158
-2026-11-09 21:14:04,193 - root - INFO -   Total validation time: 1.284818410873413 sec
-2026-11-09 21:14:06,896 - root - INFO -  Memory usage after forward pass: 35.79498291015625 GB.
-2026-11-09 21:14:49,885 - root - INFO - Time taken for epoch 2 is 40.914987 sec, avg 1.564219 samples/sec
-2026-11-09 21:14:49,891 - root - INFO -   Avg train loss=0.304982
-2026-11-09 21:14:49,901 - root - INFO -   Avg val loss=0.3405551314353943
-2026-11-09 21:14:49,911 - root - INFO -   Total validation time: 1.9484591484069824 sec
-2026-11-09 21:14:52,629 - root - INFO -  Memory usage after forward pass: 36.04498291015625 GB.
-2026-11-09 21:15:35,487 - root - INFO - Time taken for epoch 3 is 41.071731 sec, avg 1.558249 samples/sec
-2026-11-09 21:15:35,492 - root - INFO -   Avg train loss=0.292403
-2026-11-09 21:15:35,502 - root - INFO -   Avg val loss=0.3354734778404236
-2026-11-09 21:15:35,507 - root - INFO -   Total validation time: 1.9264698028564453 sec
+2026-11-12 02:11:39,113 - root - INFO - Starting Training Loop...
+2026-11-12 02:11:44,897 - root - INFO -  Memory usage after forward pass: 34.01580810546875 GB.
+2026-11-12 02:12:27,901 - root - INFO - Time taken for epoch 1 is 40.834481 sec, avg 1.469346 samples/sec
+2026-11-12 02:12:27,912 - root - INFO -   Avg train loss=0.572400
+2026-11-12 02:12:27,922 - root - INFO -   Avg val loss=0.3583354353904724
+2026-11-12 02:12:27,927 - root - INFO -   Total validation time: 1.4751899242401123 sec
+2026-11-12 02:12:30,941 - root - INFO -  Memory usage after forward pass: 36.17791748046875 GB.
+2026-11-12 02:13:16,589 - root - INFO - Time taken for epoch 2 is 43.178823 sec, avg 1.482208 samples/sec
+2026-11-12 02:13:16,599 - root - INFO -   Avg train loss=0.300683
+2026-11-12 02:13:16,605 - root - INFO -   Avg val loss=0.33952224254608154
+2026-11-12 02:13:16,610 - root - INFO -   Total validation time: 2.2306969165802 sec
+2026-11-12 02:13:19,659 - root - INFO -  Memory usage after forward pass: 36.36541748046875 GB.
+2026-11-12 02:14:05,387 - root - INFO - Time taken for epoch 3 is 42.996899 sec, avg 1.488479 samples/sec
+2026-11-12 02:14:05,397 - root - INFO -   Avg train loss=0.290804
+2026-11-12 02:14:05,413 - root - INFO -   Avg val loss=0.33401578664779663
+2026-11-12 02:14:05,423 - root - INFO -   Total validation time: 2.2465858459472656 sec
 ```
 
 Recorded performance, leaving out the profiled epoch:
 
-- GPU memory: 36.045 GB peak after the forward pass.
-- Throughput: 1.56 samples/sec across 16 GPUs, with local batch 1.
+- GPU memory: 36.366 GB peak after the forward pass.
+- Throughput: 1.48 samples/sec across 16 GPUs, with local batch 1.
 
-Attention keeps the query on this rank's tokens and all-gathers the keys and values over `sp1-sp2` before the score. In the profile that gather is `ncclDevKernel_AllGather` on the default stream, about 874 µs, between the BF16 GEMMs of the forward.
+Attention keeps the query on this rank's tokens and all-gathers the keys and values over `sp1-sp2` before the score. In the profile that gather is `ncclDevKernel_AllGather` on the default stream, about 1.3 ms, between the BF16 GEMMs of the forward.
 
 ![ViT spatial profile, NCCL all-gather of keys and values in the forward](../../tutorial_images/vit_mp.png)
 
