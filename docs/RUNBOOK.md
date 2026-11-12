@@ -221,7 +221,7 @@ Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
 ## FNO
 
-Same steps as the Swin. The widths are parameter-matched to the ViT, and `depth` stays 4 with modes 32×32. The small model is `embed_dim: 76` (47.4M) on a 1024×1024 latent grid (`downsample: 4`), with global batch 1. The resample FFT keeps the full-grid lift in FP32, so batch 4 does not fit under BF16 either. The large model is `embed_dim: 96` (75.9M) on a 1024×1024 latent grid (`downsample: 4`). `short_mp` is `embed_dim: 260` (555.1M) on a 2048 grid (`downsample: 2`), sharded over `sp1 × sp2`. `enable_fused` stays off, because fused Adam cannot update the complex spectral weights. `run_num` is prefixed with `fno` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
+Same steps as the Swin. Modes are 32×32 throughout. Parameter counts are real, with a complex spectral weight counted as two; the logged parameter count counts it once. The small model is `embed_dim: 76`, `depth: 8` (94.9M) on a 1024×1024 latent grid (`downsample: 4`), with global batch 1. The resample FFT keeps the full-grid lift in FP32, so batch 4 does not fit under BF16 either. The large model is `embed_dim: 96`, `depth: 8` (151.4M) on a 1024×1024 latent grid (`downsample: 4`). `short_mp` is parameter-matched to the ViT: `embed_dim: 260`, `depth: 4` (555.1M) on a 2048 grid (`downsample: 2`), sharded over `sp1 × sp2`. `enable_fused` stays off, because fused Adam cannot update the complex spectral weights. `run_num` is prefixed with `fno` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
 
 ### 1. Baseline — `short`, 1 GPU
 
@@ -254,7 +254,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`
 
 ### 4. Large model, local batch 1 — `short_opt_big`, 4 GPUs
 
-`downsample: 4` and `embed_dim: 96`. The latent grid is 1024×1024. `embed_dim: 163` does not fit at local batch 1. Global batch 4 on 4 GPUs, so the local batch is 1.
+`downsample: 4` and `embed_dim: 96`. The latent grid is 1024×1024. `embed_dim: 163` at `depth: 4` and `downsample: 2` does not fit at local batch 1. Global batch 4 on 4 GPUs, so the local batch is 1.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
