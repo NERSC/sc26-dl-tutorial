@@ -109,7 +109,7 @@ Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
 
 ### 10. Transformer Engine, tensor parallel — `short_mp_te`, 16 GPUs
 
-Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 16 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 24 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
 
 ```bash
 CUDA_DEVICE_MAX_CONNECTIONS=1 \

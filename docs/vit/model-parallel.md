@@ -179,7 +179,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_mp_te/4MP/mp_te/out.log`. Profiles: `vit
 
 ![ViT Transformer Engine profile, K/V send/recv overlapped with flash attention](../../tutorial_images/vit_te_sp.png)
 
-The same config with tensor parallelism leaves the sequence whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 16 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+The same config with tensor parallelism leaves the sequence whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 24 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
 
 ```bash
 CUDA_DEVICE_MAX_CONNECTIONS=1 \

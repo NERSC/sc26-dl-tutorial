@@ -7,7 +7,8 @@ All experiments use:
 
 - Image size: `4096 x 4096`
 - Input/output channels: `2 / 2`
-- Attention heads: `16`
+- Attention heads: `16`, except `24` for `short_mp` and its variants
+  (`embed_dim 1536 / 24 = head_dim 64`)
 - Dropout: `0`
 - Optimizer: Adam
 
