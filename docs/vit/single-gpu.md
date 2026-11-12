@@ -20,28 +20,28 @@ Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/short/out.log`. Profile: `vit_short
 The first three epochs look like this:
 
 ```text
-2026-11-09 19:10:11,025 - root - INFO - Starting Training Loop...
-2026-11-09 19:10:28,394 - root - INFO -  Memory usage after forward pass: 28.73602294921875 GB.
-2026-11-09 19:12:41,772 - root - INFO - Time taken for epoch 1 is 132.280377 sec, avg 0.483821 samples/sec
-2026-11-09 19:12:41,778 - root - INFO -   Avg train loss=0.458729
-2026-11-09 19:12:41,788 - root - INFO -   Avg val loss=0.3124627470970154
-2026-11-09 19:12:41,798 - root - INFO -   Total validation time: 6.951178550720215 sec
-2026-11-09 19:12:50,667 - root - INFO -  Memory usage after forward pass: 30.91571044921875 GB.
-2026-11-09 19:15:04,029 - root - INFO - Time taken for epoch 2 is 131.329318 sec, avg 0.487325 samples/sec
-2026-11-09 19:15:04,035 - root - INFO -   Avg train loss=0.182501
-2026-11-09 19:15:04,045 - root - INFO -   Avg val loss=0.21413132548332214
-2026-11-09 19:15:04,055 - root - INFO -   Total validation time: 6.9553797245025635 sec
-2026-11-09 19:15:12,936 - root - INFO -  Memory usage after forward pass: 30.91571044921875 GB.
-2026-11-09 19:17:26,309 - root - INFO - Time taken for epoch 3 is 131.337044 sec, avg 0.487296 samples/sec
-2026-11-09 19:17:26,314 - root - INFO -   Avg train loss=0.133589
-2026-11-09 19:17:26,325 - root - INFO -   Avg val loss=0.18265116214752197
-2026-11-09 19:17:26,335 - root - INFO -   Total validation time: 6.954867839813232 sec
+2026-11-12 00:11:08,885 - root - INFO - Starting Training Loop...
+2026-11-12 00:11:27,656 - root - INFO -  Memory usage after forward pass: 28.73382568359375 GB.
+2026-11-12 00:13:52,268 - root - INFO - Time taken for epoch 1 is 143.056369 sec, avg 0.447376 samples/sec
+2026-11-12 00:13:52,279 - root - INFO -   Avg train loss=0.468649
+2026-11-12 00:13:52,289 - root - INFO -   Avg val loss=0.33273956179618835
+2026-11-12 00:13:52,294 - root - INFO -   Total validation time: 7.693940162658691 sec
+2026-11-12 00:14:02,725 - root - INFO -  Memory usage after forward pass: 30.91351318359375 GB.
+2026-11-12 00:16:26,789 - root - INFO - Time taken for epoch 2 is 141.962560 sec, avg 0.450823 samples/sec
+2026-11-12 00:16:26,800 - root - INFO -   Avg train loss=0.200263
+2026-11-12 00:16:26,810 - root - INFO -   Avg val loss=0.23314695060253143
+2026-11-12 00:16:26,820 - root - INFO -   Total validation time: 7.683780670166016 sec
+2026-11-12 00:16:37,131 - root - INFO -  Memory usage after forward pass: 30.91351318359375 GB.
+2026-11-12 00:19:01,057 - root - INFO - Time taken for epoch 3 is 141.733836 sec, avg 0.451551 samples/sec
+2026-11-12 00:19:01,068 - root - INFO -   Avg train loss=0.144453
+2026-11-12 00:19:01,073 - root - INFO -   Avg val loss=0.19404181838035583
+2026-11-12 00:19:01,083 - root - INFO -   Total validation time: 7.688852548599243 sec
 ```
 
 Recorded performance:
 
-- GPU memory: 30.916 GB peak.
-- Throughput: 0.486 samples/sec on average.
+- GPU memory: 30.914 GB peak.
+- Throughput: 0.450 samples/sec on average.
 
 The script wraps the process in `nsys profile` and writes `vit_short.<rank>.nsys-rep` under the log directory. `--trace=cuda,nvtx` keeps the trace to CUDA and the ranges we added. `-c cudaProfilerApi` tells Nsight to record only the stretch between `profiler.start` and `profiler.stop`. Copy the report back and open it in the Nsight Systems install from [Setup](../../README.md#setup). The same prefix works on the later job scripts.
 
