@@ -37,32 +37,32 @@ sbatch -N 2 ./submit_mp.sh --yaml_config ./config/swin.yaml --config short_mp --
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/swin_mp/out.log`. Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
-`sp1=4` brings the local parameter count to 480.048 M. The first three epochs stay under 32 GB. Epoch 4 is the profiled epoch.
+`sp1=4` brings the local parameter count to 480.048 M. The first three epochs stay under 34 GB. Epoch 4 is the profiled epoch.
 
 ```text
-2026-11-10 15:49:24,473 - root - INFO - Starting Training Loop...
-2026-11-10 15:49:28,521 - root - INFO -  Memory usage after forward pass: 29.57818603515625 GB.
-2026-11-10 15:50:04,104 - root - INFO - Time taken for epoch 1 is 33.420237 sec, avg 7.540342 samples/sec
-2026-11-10 15:50:04,109 - root - INFO -   Avg train loss=0.379575
-2026-11-10 15:50:04,120 - root - INFO -   Avg val loss=0.31113898754119873
-2026-11-10 15:50:04,125 - root - INFO -   Total validation time: 0.9786252975463867 sec
-2026-11-10 15:50:04,783 - root - INFO -  Memory usage after forward pass: 31.67779541015625 GB.
-2026-11-10 15:50:40,508 - root - INFO - Time taken for epoch 2 is 33.419808 sec, avg 7.660128 samples/sec
-2026-11-10 15:50:40,513 - root - INFO -   Avg train loss=0.217032
-2026-11-10 15:50:40,524 - root - INFO -   Avg val loss=0.1492355763912201
-2026-11-10 15:50:40,529 - root - INFO -   Total validation time: 1.0763258934020996 sec
-2026-11-10 15:50:41,181 - root - INFO -  Memory usage after forward pass: 31.86529541015625 GB.
-2026-11-10 15:51:16,734 - root - INFO - Time taken for epoch 3 is 33.276279 sec, avg 7.693168 samples/sec
-2026-11-10 15:51:16,739 - root - INFO -   Avg train loss=0.115951
-2026-11-10 15:51:16,749 - root - INFO -   Avg val loss=0.14162248373031616
-2026-11-10 15:51:16,755 - root - INFO -   Total validation time: 1.0594513416290283 sec
+2026-11-12 03:19:33,633 - root - INFO - Starting Training Loop...
+2026-11-12 03:19:38,155 - root - INFO -  Memory usage after forward pass: 31.08612060546875 GB.
+2026-11-12 03:20:12,485 - root - INFO - Time taken for epoch 1 is 31.518902 sec, avg 7.995202 samples/sec
+2026-11-12 03:20:12,495 - root - INFO -   Avg train loss=0.374362
+2026-11-12 03:20:12,500 - root - INFO -   Avg val loss=0.3081926703453064
+2026-11-12 03:20:12,500 - root - INFO -   Total validation time: 1.1185808181762695 sec
+2026-11-12 03:20:13,336 - root - INFO -  Memory usage after forward pass: 33.27947998046875 GB.
+2026-11-12 03:20:47,744 - root - INFO - Time taken for epoch 2 is 31.457812 sec, avg 8.137883 samples/sec
+2026-11-12 03:20:47,755 - root - INFO -   Avg train loss=0.229070
+2026-11-12 03:20:47,765 - root - INFO -   Avg val loss=0.14864471554756165
+2026-11-12 03:20:47,770 - root - INFO -   Total validation time: 1.1535515785217285 sec
+2026-11-12 03:20:48,485 - root - INFO -  Memory usage after forward pass: 33.46697998046875 GB.
+2026-11-12 03:21:22,933 - root - INFO - Time taken for epoch 3 is 31.501408 sec, avg 8.126621 samples/sec
+2026-11-12 03:21:22,944 - root - INFO -   Avg train loss=0.116889
+2026-11-12 03:21:22,954 - root - INFO -   Avg val loss=0.14314872026443481
+2026-11-12 03:21:22,959 - root - INFO -   Total validation time: 1.21921706199646 sec
 ```
 
-Recorded performance, leaving out the profiled epoch:
+Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-- GPU memory: 31.865 GB peak after the forward pass.
-- Throughput: 7.69 samples/sec across 16 GPUs, with local batch 1.
+- GPU memory: 33.467 GB peak after the forward pass.
+- Throughput: 8.13 samples/sec across 16 GPUs, with local batch 1.
 
-The odd blocks roll the local grid by half a window along `sp1` and exchange the cells that cross the rank boundary. `sp2` has one rank, so that roll stays on the GPU. In the profile the NCCL kernels for the exchange sit on the default stream between the BF16 GEMMs. One step is about 526 ms, and the forward inside it is about 147 ms.
+The odd blocks roll the local grid by half a window along `sp1` and exchange the cells that cross the rank boundary. `sp2` has one rank, so that roll stays on the GPU. In the profile the NCCL kernels for the exchange sit on the default stream between the BF16 GEMMs. One step is about 485 ms, and the forward inside it is about 152 ms.
 
 ![Swin spatial profile, NCCL exchange for the shifted window during the forward](../../tutorial_images/swin_mp.png)
