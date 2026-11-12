@@ -77,28 +77,28 @@ sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short_opt --run
 The first epoch pays for `torch.compile`. The next two are the steady rate:
 
 ```text
-2026-11-09 19:39:18,590 - root - INFO - Starting Training Loop...
-2026-11-09 19:39:55,033 - root - INFO -  Memory usage after forward pass: 18.87664794921875 GB.
-2026-11-09 19:40:14,670 - root - INFO - Time taken for epoch 1 is 27.557684 sec, avg 2.322401 samples/sec
-2026-11-09 19:40:14,676 - root - INFO -   Avg train loss=0.460745
-2026-11-09 19:40:14,686 - root - INFO -   Avg val loss=0.31617942452430725
-2026-11-09 19:40:14,696 - root - INFO -   Total validation time: 3.941683769226074 sec
-2026-11-09 19:40:18,116 - root - INFO -  Memory usage after forward pass: 19.87664794921875 GB.
-2026-11-09 19:40:37,275 - root - INFO - Time taken for epoch 2 is 17.045505 sec, avg 3.754655 samples/sec
-2026-11-09 19:40:37,281 - root - INFO -   Avg train loss=0.184020
-2026-11-09 19:40:37,291 - root - INFO -   Avg val loss=0.21097834408283234
-2026-11-09 19:40:37,296 - root - INFO -   Total validation time: 3.4452438354492188 sec
-2026-11-09 19:40:40,546 - root - INFO -  Memory usage after forward pass: 19.87664794921875 GB.
-2026-11-09 19:40:59,949 - root - INFO - Time taken for epoch 3 is 16.763713 sec, avg 3.817770 samples/sec
-2026-11-09 19:40:59,955 - root - INFO -   Avg train loss=0.131843
-2026-11-09 19:40:59,965 - root - INFO -   Avg val loss=0.17809422314167023
-2026-11-09 19:40:59,975 - root - INFO -   Total validation time: 3.759243965148926 sec
+2026-11-12 00:41:05,073 - root - INFO - Starting Training Loop...
+2026-11-12 00:41:36,707 - root - INFO -  Memory usage after forward pass: 18.88031005859375 GB.
+2026-11-12 00:41:57,886 - root - INFO - Time taken for epoch 1 is 25.893926 sec, avg 2.471622 samples/sec
+2026-11-12 00:41:57,897 - root - INFO -   Avg train loss=0.462643
+2026-11-12 00:41:57,907 - root - INFO -   Avg val loss=0.3145856261253357
+2026-11-12 00:41:57,917 - root - INFO -   Total validation time: 4.084561824798584 sec
+2026-11-12 00:42:01,435 - root - INFO -  Memory usage after forward pass: 19.88031005859375 GB.
+2026-11-12 00:42:22,641 - root - INFO - Time taken for epoch 2 is 17.670814 sec, avg 3.621791 samples/sec
+2026-11-12 00:42:22,651 - root - INFO -   Avg train loss=0.183656
+2026-11-12 00:42:22,667 - root - INFO -   Avg val loss=0.2188115119934082
+2026-11-12 00:42:22,677 - root - INFO -   Total validation time: 4.007168292999268 sec
+2026-11-12 00:42:26,175 - root - INFO -  Memory usage after forward pass: 19.88031005859375 GB.
+2026-11-12 00:42:47,391 - root - INFO - Time taken for epoch 3 is 17.673452 sec, avg 3.621251 samples/sec
+2026-11-12 00:42:47,401 - root - INFO -   Avg train loss=0.136330
+2026-11-12 00:42:47,417 - root - INFO -   Avg val loss=0.18631479144096375
+2026-11-12 00:42:47,427 - root - INFO -   Total validation time: 3.987053632736206 sec
 ```
 
 Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-- GPU memory: 19.877 GB peak, down from 30.916 GB in the FP32 baseline.
-- Throughput: 3.80 samples/sec, up from 0.486 samples/sec.
+- GPU memory: 19.880 GB peak, down from 30.914 GB in the FP32 baseline.
+- Throughput: 3.62 samples/sec, up from 0.450 samples/sec.
 
 We see a significant improvement in throughput, and a reduction in GPU memory usage compared to the FP32 baseline.
 
@@ -132,28 +132,28 @@ sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short_opt_dali 
 The first epoch still pays for `torch.compile`. The next two are the steady rate:
 
 ```text
-2026-11-09 19:54:40,715 - root - INFO - Starting Training Loop...
-2026-11-09 19:54:49,540 - root - INFO -  Memory usage after forward pass: 24.43133544921875 GB.
-2026-11-09 19:55:06,093 - root - INFO - Time taken for epoch 1 is 14.548313 sec, avg 4.124189 samples/sec
-2026-11-09 19:55:06,099 - root - INFO -   Avg train loss=0.477418
-2026-11-09 19:55:06,109 - root - INFO -   Avg val loss=0.30858129262924194
-2026-11-09 19:55:06,119 - root - INFO -   Total validation time: 1.5312886238098145 sec
-2026-11-09 19:55:07,133 - root - INFO -  Memory usage after forward pass: 25.43133544921875 GB.
-2026-11-09 19:55:25,007 - root - INFO - Time taken for epoch 2 is 14.603768 sec, avg 4.382431 samples/sec
-2026-11-09 19:55:25,013 - root - INFO -   Avg train loss=0.191646
-2026-11-09 19:55:25,018 - root - INFO -   Avg val loss=0.21187180280685425
-2026-11-09 19:55:25,023 - root - INFO -   Total validation time: 2.0731003284454346 sec
-2026-11-09 19:55:26,050 - root - INFO -  Memory usage after forward pass: 25.43524169921875 GB.
-2026-11-09 19:55:43,322 - root - INFO - Time taken for epoch 3 is 14.622557 sec, avg 4.376800 samples/sec
-2026-11-09 19:55:43,327 - root - INFO -   Avg train loss=0.132309
-2026-11-09 19:55:43,337 - root - INFO -   Avg val loss=0.17815913259983063
-2026-11-09 19:55:43,342 - root - INFO -   Total validation time: 1.3880062103271484 sec
+2026-11-12 01:03:20,656 - root - INFO - Starting Training Loop...
+2026-11-12 01:03:39,572 - root - INFO -  Memory usage after forward pass: 24.42913818359375 GB.
+2026-11-12 01:03:58,193 - root - INFO - Time taken for epoch 1 is 21.396088 sec, avg 2.804251 samples/sec
+2026-11-12 01:03:58,203 - root - INFO -   Avg train loss=0.477388
+2026-11-12 01:03:58,218 - root - INFO -   Avg val loss=0.3031325340270996
+2026-11-12 01:03:58,229 - root - INFO -   Total validation time: 2.7410261631011963 sec
+2026-11-12 01:03:59,357 - root - INFO -  Memory usage after forward pass: 25.43304443359375 GB.
+2026-11-12 01:04:17,862 - root - INFO - Time taken for epoch 2 is 15.180354 sec, avg 4.215975 samples/sec
+2026-11-12 01:04:17,872 - root - INFO -   Avg train loss=0.184022
+2026-11-12 01:04:17,888 - root - INFO -   Avg val loss=0.20754294097423553
+2026-11-12 01:04:17,898 - root - INFO -   Total validation time: 1.6718838214874268 sec
+2026-11-12 01:04:19,032 - root - INFO -  Memory usage after forward pass: 25.43304443359375 GB.
+2026-11-12 01:04:37,394 - root - INFO - Time taken for epoch 3 is 15.186325 sec, avg 4.214318 samples/sec
+2026-11-12 01:04:37,404 - root - INFO -   Avg train loss=0.129656
+2026-11-12 01:04:37,420 - root - INFO -   Avg val loss=0.1751786470413208
+2026-11-12 01:04:37,430 - root - INFO -   Total validation time: 1.527073860168457 sec
 ```
 
 Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-- GPU memory: 25.435 GB peak, up from 19.877 GB with the PyTorch loader. Before the first step the device is already at 7.715 GB, against 1.148 GB for `short_opt`. That increase is DALI's copy of the prefetched batches.
-- Throughput: 4.38 samples/sec, up from 3.80 samples/sec.
+- GPU memory: 25.433 GB peak, up from 19.880 GB with the PyTorch loader. Before the first step the device is already at 7.712 GB, against 1.146 GB for `short_opt`. That increase is DALI's copy of the prefetched batches.
+- Throughput: 4.21 samples/sec, up from 3.62 samples/sec.
 
 DALI's copy and its own kernels run on a second CUDA stream while the default stream is still inside the current step. The forward is about 276 ms, and each step is about 870 ms.
 
