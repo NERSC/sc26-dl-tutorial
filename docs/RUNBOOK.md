@@ -109,7 +109,7 @@ Profiles: `vit_mp_te.0.nsys-rep` through `vit_mp_te.15.nsys-rep`.
 
 ### 10. Transformer Engine, tensor parallel — `short_mp_te`, 16 GPUs
 
-Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 16 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
+Same config, with the sequence left whole. `tp=4` shards the heads and the MLP across four GPUs within a node. `1536` and the 24 heads divide by 4. Two nodes leave `dp=4`, so the local batch stays 1. `CUDA_DEVICE_MAX_CONNECTIONS=1` keeps the backward all-reduce ahead of the weight-gradient GEMM so the two overlap.
 
 ```bash
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
@@ -221,7 +221,7 @@ Profiles: `swin_mp.0.nsys-rep` through `swin_mp.15.nsys-rep`.
 
 ## FNO
 
-Same steps as the Swin. The widths are parameter-matched to the ViT, and `depth` stays 4 with modes 32×32. The small model is `embed_dim: 76` (47.4M) on a 1024×1024 latent grid (`downsample: 4`), with global batch 1. The resample FFT keeps the full-grid lift in FP32, so batch 4 does not fit under BF16 either. The large model is `embed_dim: 96` (75.9M) on a 1024×1024 latent grid (`downsample: 4`). `short_mp` is `embed_dim: 260` (555.1M) on a 2048 grid (`downsample: 2`), sharded over `sp1 × sp2`. `enable_fused` stays off, because fused Adam cannot update the complex spectral weights. `run_num` is prefixed with `fno` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
+Same steps as the Swin. Modes are 32×32 throughout. Parameter counts are real, with a complex spectral weight counted as two; the logged parameter count counts it once. The small model is `embed_dim: 76`, `depth: 8` (94.9M) on a 1024×1024 latent grid (`downsample: 4`), with global batch 1. The resample FFT keeps the full-grid lift in FP32, so batch 4 does not fit under BF16 either. The large model is `embed_dim: 96`, `depth: 8` (151.4M) on a 1024×1024 latent grid (`downsample: 4`). `short_mp` is parameter-matched to the ViT: `embed_dim: 260`, `depth: 4` (555.1M) on a 2048 grid (`downsample: 2`), sharded over `sp1 × sp2`. `enable_fused` stays off, because fused Adam cannot update the complex spectral weights. `run_num` is prefixed with `fno` because the log path is `<config>/<N>GPU/<run_num>` and does not include the YAML file name.
 
 ### 1. Baseline — `short`, 1 GPU
 
@@ -254,7 +254,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/fno_dali/out.log`
 
 ### 4. Large model, local batch 1 — `short_opt_big`, 4 GPUs
 
-`downsample: 4` and `embed_dim: 96`. The latent grid is 1024×1024. `embed_dim: 163` does not fit at local batch 1. Global batch 4 on 4 GPUs, so the local batch is 1.
+`downsample: 4` and `embed_dim: 96`. The latent grid is 1024×1024. `embed_dim: 163` at `depth: 4` and `downsample: 2` does not fit at local batch 1. Global batch 4 on 4 GPUs, so the local batch is 1.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=fno_big \
@@ -311,7 +311,7 @@ batch 1. Spatial parallelism uses patch 16 and width 768, with `tp=1`.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_short \
-sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 \
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short --run_num convnext
 ```
 
@@ -321,7 +321,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short/1GPU/convnext/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_short_opt \
-sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_opt \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 \
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt --run_num convnext_opt
 ```
 
@@ -331,7 +331,7 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt/1GPU/convnext_opt/out.log`
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_short_opt_dali \
-sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 -J convnext_short_opt_dali \
+sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 \
     ./submit.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali --run_num convnext_dali
 ```
 
@@ -344,7 +344,7 @@ Global batch 16, local batch 4. The learning rate is `1e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp4 \
-sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 -J convnext_dp4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp4 --run_num convnext_dp4
 ```
 
@@ -360,7 +360,7 @@ Global batch 64, local batch 4. The learning rate is `2e-3`, from
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp16 \
-sbatch -N 2 --time=00:30:00 -J convnext_dp16 \
+sbatch -N 2 --time=00:30:00 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp16 --run_num convnext_dp16
 ```
 
@@ -377,7 +377,7 @@ five epochs. Check memory use and GPU activity in this run before scaling out.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big \
-sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 -J convnext_big \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_big --run_num convnext_big
 ```
 
@@ -393,7 +393,7 @@ five epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big16 \
-sbatch -N 2 --time=00:30:00 -J convnext_big16 \
+sbatch -N 2 --time=00:30:00 \
     ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_big_dp16 --run_num convnext_big16
 ```
 
@@ -410,7 +410,7 @@ The training forward runs out of memory in the channel MLP's first linear layer.
 ```bash
 ENABLE_PROFILING=0 \
 sbatch -N 1 --gpus-per-node=1 \
-    --time=00:30:00 -J convnext_unsplit ./submit_mp.sh \
+    --time=00:30:00 ./submit_mp.sh \
     --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_unsplit \
     --tp=1 --sp1=1 --sp2=1
 ```
@@ -425,7 +425,7 @@ This run fits and completes training and validation.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4 \
-sbatch -N 1 --gpus-per-node=4 --cpus-per-task=48 --time=00:30:00 -J convnext_sp4 \
+sbatch -N 1 --gpus-per-node=4 --cpus-per-task=48 --time=00:30:00 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_sp4 \
     --tp=1 --sp1=4 --sp2=1
 ```
@@ -441,7 +441,7 @@ global batch becomes 16, and `lr=1e-3`. `num_iters: 80` schedules five epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4_dp4 \
-sbatch -N 2 --time=00:30:00 -J convnext_sp4_dp4 \
+sbatch -N 2 --time=00:30:00 \
     ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp_dp4 --run_num convnext_sp4_dp4 \
     --tp=1 --sp1=4 --sp2=1
 ```

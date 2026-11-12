@@ -2,8 +2,9 @@ base: &base
 
   # Model config
   network: 'fno'
-  # Parameter-matched to the ViT base (embed_dim 512, depth 12, patch 32: 48.3M).
-  # embed 76, depth 4, modes 32x32: 47.4M real parameters. A complex spectral weight counts as two.
+  # Compare the ViT base (embed_dim 512, depth 12, patch 32: 48.3M).
+  # embed 76, depth 8, modes 32x32: 94.9M real parameters, about 2x the ViT. A complex spectral weight
+  # counts as two. The logged parameter count (numel) counts it once and reports 47.6M.
   embed_dim: 76
   depth: 8
   dropout: 0.0
@@ -73,8 +74,9 @@ short_opt_dali_dp:
   <<: *short_opt_dali
   global_batch_size: 4
 
-# The ViT short_opt_big match is embed 163 (218.2M). That forward did not fit on one GPU
-# at local batch 1, so the width is 96 (75.9M). Latent grid stays 1024x1024.
+# The ViT short_opt_big match at depth 4 and downsample 2 was embed 163 (218.2M). That forward
+# did not fit on one GPU at local batch 1, so the width is 96: 151.4M real parameters at depth 8
+# (75.9M logged, complex weights counted once). Latent grid stays 1024x1024.
 short_opt_big: &short_opt_big
   <<: *short_ls
   global_batch_size: 4

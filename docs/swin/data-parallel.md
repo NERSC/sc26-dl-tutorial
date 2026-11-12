@@ -20,28 +20,28 @@ Profiles: `swin_short_opt_dali_big.0.nsys-rep` through `swin_short_opt_dali_big.
 The first epoch pays for `torch.compile`. Epoch 4 is the profiled epoch.
 
 ```text
-2026-11-10 15:29:17,746 - root - INFO - Starting Training Loop...
-2026-11-10 15:29:29,814 - root - INFO -  Memory usage after forward pass: 36.3162841796875 GB.
-2026-11-10 15:30:11,202 - root - INFO - Time taken for epoch 1 is 40.171548 sec, avg 6.273097 samples/sec
-2026-11-10 15:30:11,208 - root - INFO -   Avg train loss=0.300458
-2026-11-10 15:30:11,218 - root - INFO -   Avg val loss=0.15853233635425568
-2026-11-10 15:30:11,228 - root - INFO -   Total validation time: 2.645237445831299 sec
-2026-11-10 15:30:11,985 - root - INFO -  Memory usage after forward pass: 37.0701904296875 GB.
-2026-11-10 15:30:53,228 - root - INFO - Time taken for epoch 2 is 38.457580 sec, avg 6.656685 samples/sec
-2026-11-10 15:30:53,234 - root - INFO -   Avg train loss=0.116468
-2026-11-10 15:30:53,244 - root - INFO -   Avg val loss=0.13618680834770203
-2026-11-10 15:30:53,249 - root - INFO -   Total validation time: 1.6074273586273193 sec
-2026-11-10 15:30:54,004 - root - INFO -  Memory usage after forward pass: 37.3201904296875 GB.
-2026-11-10 15:31:35,250 - root - INFO - Time taken for epoch 3 is 38.458148 sec, avg 6.656587 samples/sec
-2026-11-10 15:31:35,255 - root - INFO -   Avg train loss=0.099881
-2026-11-10 15:31:35,265 - root - INFO -   Avg val loss=0.11573591828346252
-2026-11-10 15:31:35,270 - root - INFO -   Total validation time: 1.5964035987854004 sec
+2026-11-12 03:02:13,016 - root - INFO - Starting Training Loop...
+2026-11-12 03:02:42,175 - root - INFO -  Memory usage after forward pass: 36.4117431640625 GB.
+2026-11-12 03:03:41,369 - root - INFO - Time taken for epoch 1 is 65.220147 sec, avg 3.863837 samples/sec
+2026-11-12 03:03:41,379 - root - INFO -   Avg train loss=0.279806
+2026-11-12 03:03:41,385 - root - INFO -   Avg val loss=0.1547510176897049
+2026-11-12 03:03:41,390 - root - INFO -   Total validation time: 3.2699644565582275 sec
+2026-11-12 03:03:42,281 - root - INFO -  Memory usage after forward pass: 36.9117431640625 GB.
+2026-11-12 03:04:25,209 - root - INFO - Time taken for epoch 2 is 39.418287 sec, avg 6.494448 samples/sec
+2026-11-12 03:04:25,219 - root - INFO -   Avg train loss=0.116139
+2026-11-12 03:04:25,230 - root - INFO -   Avg val loss=0.1373618096113205
+2026-11-12 03:04:25,240 - root - INFO -   Total validation time: 1.6988492012023926 sec
+2026-11-12 03:04:26,088 - root - INFO -  Memory usage after forward pass: 37.1617431640625 GB.
+2026-11-12 03:05:09,120 - root - INFO - Time taken for epoch 3 is 39.357143 sec, avg 6.504537 samples/sec
+2026-11-12 03:05:09,130 - root - INFO -   Avg train loss=0.100376
+2026-11-12 03:05:09,141 - root - INFO -   Avg val loss=0.11545325815677643
+2026-11-12 03:05:09,146 - root - INFO -   Total validation time: 1.8019866943359375 sec
 ```
 
 Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-- GPU memory: 37.320 GB peak after the forward pass.
-- Throughput: 6.66 samples/sec across 4 GPUs, with local batch 1.
+- GPU memory: 37.162 GB peak after the forward pass.
+- Throughput: 6.50 samples/sec across 4 GPUs, with local batch 1.
 
 The gradient all-reduces are NCCL kernels on their own stream, issued during the backward. The larger Swin makes the step long enough that DALI hides the read, and the timeline shows no idle gap between steps.
 
@@ -55,6 +55,6 @@ sbatch -N 2 ./submit_dp.sh --yaml_config ./config/swin.yaml --config short_opt_b
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`.
 
-After the first epoch the run holds 25.6 samples/sec, up from 6.66 on 4 GPUs. The forward peaks at 36.142 GB.
+After the first epoch the run holds 24.2 samples/sec, up from 6.50 on 4 GPUs. The forward peaks at 36.218 GB.
 
 The next page splits the replica: [Model parallelism](model-parallel.md).

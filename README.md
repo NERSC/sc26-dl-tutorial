@@ -113,14 +113,15 @@ The copied block from above is the same script with a different `--config`:
 sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config my_vit
 ```
 
-Arguments after the script name are forwarded to `train.py`. Slurm writes the job output to a `.out` file beside the script. `squeue --me` shows the job id.
+Arguments after the script name are forwarded to `train.py`. Slurm writes the job output to `<yaml>_<config>[_<split>]_<jobid>.out` in the directory you submitted from, for example `vit_short_<jobid>.out`. The split part names the `--tp`, `--sp1`, and `--sp2` values above 1, such as `_sp4` or `_tp4`. The job shows up under the same name in `squeue`. `squeue --me` shows the job id.
 
 `expdir` (default `/logs`) is the log path inside the container. The run is written to `<expdir>/<config>/<N>GPU/<run_num>/`.
 
 Let us begin. Start by submitting the baseline job; this will take several minutes to complete since it is unoptimized and running on a single GPU.
 
 ```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
+ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short \
+sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short --run_num short
 ```
 
 The profile of that run, and the optimized runs after it, are on the [ViT single-GPU page](docs/vit/single-gpu.md).

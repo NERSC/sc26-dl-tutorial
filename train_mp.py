@@ -18,6 +18,8 @@ import warnings
 warnings.simplefilter("ignore", FutureWarning)
 
 logging_utils.config_logger()
+# silence transformer engine registers opaque types deprecation warning
+logging.getLogger("torch._library.opaque_object").setLevel(logging.ERROR)
 from utils.YParams import YParams
 from utils import get_data_loader_distributed, profiled_batches
 from utils import comm
