@@ -12,7 +12,7 @@ Once you have your username and password, go to [sc26.dlscale-tutorial.org](http
 
 In the top menu, click **Clusters**, then **SC26 AWS ParallelCluster Federated GPU Workshop Shell Access** to open a terminal.
 
-![Open a terminal from the Clusters menu by selecting the highlighted Shell Access entry](tutorial_images/cluster-terminal.png)
+![Open a terminal from the Clusters menu by selecting the highlighted Shell Access entry](../tutorial_images/cluster-terminal.png)
 
 ## 4. Clone the tutorial repository
 
@@ -25,20 +25,20 @@ cd sc26-dl-tutorial
 
 After the download finishes and you change directories, the terminal prompt shows `sc26-dl-tutorial`, as in the screenshot below.
 
-![Browser terminal showing a successful clone of the tutorial repository and the prompt inside sc26-dl-tutorial](tutorial_images/cluster-clone-repository.png)
+![Browser terminal showing a successful clone of the tutorial repository and the prompt inside sc26-dl-tutorial](../tutorial_images/cluster-clone-repository.png)
 
 ## 5. Submit a job
 
-Submit jobs using `sbatch` and the provided submission scripts. From the `sc26-dl-tutorial` directory, run the example below to start the single-GPU ViT baseline (`short`), the first experiment in the [ViT runbook](docs/RUNBOOK.md#vit):
+Submit jobs using `sbatch` and the provided submission scripts. From the `sc26-dl-tutorial` directory, run the example below to start the single-GPU ViT baseline (`short`), the first run in the [ViT single-GPU walkthrough](vit/single-gpu.md#profiling):
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=baseline \
 sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config short
 ```
 
-This uses [`submit.sh`](submit.sh) to run training on one GPU, with Nsight Systems profiling enabled. Press **Enter** to submit the job.
+This uses [`submit.sh`](../submit.sh) to run training on one GPU, with Nsight Systems profiling enabled. Press **Enter** to submit the job.
 
-![Browser terminal with the sbatch command for the single-GPU ViT baseline, ready to submit](tutorial_images/cluster-submit-job.png)
+![Browser terminal with the sbatch command for the single-GPU ViT baseline, ready to submit](../tutorial_images/cluster-submit-job.png)
 
 ## 6. Check your job's status
 
@@ -59,7 +59,7 @@ For a running job, `TIME` shows the elapsed runtime and `NODELIST(REASON)` lists
 
 In this example, job `67108898` has state `R` and has been running for five seconds on one node.
 
-![Browser terminal showing successful job submission and squeue --me reporting the job as running](tutorial_images/cluster-job-status.png)
+![Browser terminal showing successful job submission and squeue --me reporting the job as running](../tutorial_images/cluster-job-status.png)
 
 ### Read the output log
 
@@ -97,7 +97,7 @@ start-tensorboard --background
 
 The helper prints a link you can open in your browser to view the training metrics. Use the link from your own terminal output, and log in with your tutorial username and password if prompted.
 
-![Browser terminal showing the TensorBoard helper, its browser link, and the stop command](tutorial_images/cluster-tensorboard.png)
+![Browser terminal showing the TensorBoard helper, its browser link, and the stop command](../tutorial_images/cluster-tensorboard.png)
 
 By default, the helper reads logs from `$HOME/sc26-dl-tutorial/logs`. If you use a different logging directory, pass its path before `--background`. For example, the command below sets the directory explicitly; replace the path with your own:
 
@@ -117,12 +117,12 @@ start-tensorboard --stop
 
 Download the Nsight Systems profiles (`.nsys-rep` files) to inspect them on your local computer. Return to the [cluster website](https://sc26.dlscale-tutorial.org/), click **Files**, then **Home Directory** if your logs are stored in your home directory.
 
-![Cluster website with the Files menu open and the Home Directory option visible](tutorial_images/cluster-files-home.png)
+![Cluster website with the Files menu open and the Home Directory option visible](../tutorial_images/cluster-files-home.png)
 
 Open the **sc26-dl-tutorial** folder, then **logs**. If you used a different logging directory, navigate there instead.
 
 Find the profile you want to download, such as `baseline.0.nsys-rep`. Click the **three-dot menu** beside that file, then **Download** to save it to your local computer.
 
-![File browser in sc26-dl-tutorial/logs with the Download action open for baseline.0.nsys-rep](tutorial_images/cluster-download-profile.png)
+![File browser in sc26-dl-tutorial/logs with the Download action open for baseline.0.nsys-rep](../tutorial_images/cluster-download-profile.png)
 
 Open the downloaded `.nsys-rep` file in Nsight Systems on your computer to explore the profile.
