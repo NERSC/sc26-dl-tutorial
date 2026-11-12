@@ -23,11 +23,9 @@ Join the Slack workspace:
 
 ## Setup
 
-First, complete the following steps:
+### [Cluster setup](docs/cluster.md)
 
-1. **[Cluster setup](docs/cluster.md)**
-
-2. **Install Nsight Systems**
+### Install Nsight Systems
 
 Jobs write a profile on the compute node. Install [Nsight Systems](https://developer.nvidia.com/nsight-systems) on your own machine so you can open the `.nsys-rep` files.
 
