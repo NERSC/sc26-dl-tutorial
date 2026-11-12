@@ -56,30 +56,30 @@ sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./
 The first epoch pays for `torch.compile`. Four GPUs and a global batch of 16 turn one epoch into four steps, so the same 80 iterations run for 20 epochs. Epochs 2 and 3 are the steady rate:
 
 ```text
-2026-11-09 20:13:23,020 - root - INFO - Starting Training Loop...
-2026-11-09 20:13:48,225 - root - INFO -  Memory usage after forward pass: 23.2166748046875 GB.
-2026-11-09 20:13:55,286 - root - INFO - Time taken for epoch 1 is 12.101436 sec, avg 3.966471 samples/sec
-2026-11-09 20:13:55,291 - root - INFO -   Avg train loss=0.941822
-2026-11-09 20:13:55,301 - root - INFO -   Avg val loss=0.6188808679580688
-2026-11-09 20:13:55,306 - root - INFO -   Total validation time: 2.533473253250122 sec
-2026-11-09 20:13:56,345 - root - INFO -  Memory usage after forward pass: 24.2186279296875 GB.
-2026-11-09 20:14:02,919 - root - INFO - Time taken for epoch 2 is 4.220179 sec, avg 15.165235 samples/sec
-2026-11-09 20:14:02,924 - root - INFO -   Avg train loss=0.456384
-2026-11-09 20:14:02,935 - root - INFO -   Avg val loss=0.4121951758861542
-2026-11-09 20:14:02,940 - root - INFO -   Total validation time: 1.0587599277496338 sec
-2026-11-09 20:14:03,978 - root - INFO -  Memory usage after forward pass: 24.2186279296875 GB.
-2026-11-09 20:14:10,092 - root - INFO - Time taken for epoch 3 is 4.233808 sec, avg 15.116417 samples/sec
-2026-11-09 20:14:10,097 - root - INFO -   Avg train loss=0.329778
-2026-11-09 20:14:10,107 - root - INFO -   Avg val loss=0.3899458646774292
-2026-11-09 20:14:10,117 - root - INFO -   Total validation time: 0.6728227138519287 sec
+2026-11-12 01:16:53,455 - root - INFO - Starting Training Loop...
+2026-11-12 01:17:18,357 - root - INFO -  Memory usage after forward pass: 23.3082275390625 GB.
+2026-11-12 01:17:27,660 - root - INFO - Time taken for epoch 1 is 12.981432 sec, avg 3.697589 samples/sec
+2026-11-12 01:17:27,670 - root - INFO -   Avg train loss=0.936981
+2026-11-12 01:17:27,675 - root - INFO -   Avg val loss=0.6127602458000183
+2026-11-12 01:17:27,675 - root - INFO -   Total validation time: 3.4977762699127197 sec
+2026-11-12 01:17:28,851 - root - INFO -  Memory usage after forward pass: 24.3101806640625 GB.
+2026-11-12 01:17:37,187 - root - INFO - Time taken for epoch 2 is 5.071733 sec, avg 12.618960 samples/sec
+2026-11-12 01:17:37,197 - root - INFO -   Avg train loss=0.452554
+2026-11-12 01:17:37,208 - root - INFO -   Avg val loss=0.4086229205131531
+2026-11-12 01:17:37,213 - root - INFO -   Total validation time: 1.498971939086914 sec
+2026-11-12 01:17:38,378 - root - INFO -  Memory usage after forward pass: 24.3101806640625 GB.
+2026-11-12 01:17:46,518 - root - INFO - Time taken for epoch 3 is 4.931609 sec, avg 12.977509 samples/sec
+2026-11-12 01:17:46,529 - root - INFO -   Avg train loss=0.325195
+2026-11-12 01:17:46,544 - root - INFO -   Avg val loss=0.3758239150047302
+2026-11-12 01:17:46,554 - root - INFO -   Total validation time: 1.2810184955596924 sec
 ```
 
 Recorded performance, leaving out epoch 1 and the profiled epoch:
 
-- GPU memory: 24.219 GB peak on each GPU. The local batch is still 4, so this is close to the 25.435 GB of the one-GPU DALI run.
-- Throughput: 15.11 samples/sec across 4 GPUs, up from 4.38 on one GPU.
+- GPU memory: 24.310 GB peak on each GPU. The local batch is still 4, so this is close to the 25.433 GB of the one-GPU DALI run.
+- Throughput: 12.87 samples/sec across 4 GPUs, up from 4.21 on one GPU.
 
-Profile every rank. The gradient all-reduces are NCCL kernels on their own stream, issued during the backward while the GEMMs are still running on the default stream. In this step the all-reduce takes about 2.4 ms inside an 873 ms step. This all-reduce is fully overlapped with the backward compute.
+Profile every rank. The gradient all-reduces are NCCL kernels on their own stream, issued during the backward while the GEMMs are still running on the default stream. In this step the all-reduce takes about 1.3 ms inside an 877 ms step. This all-reduce is fully overlapped with the backward compute.
 
 ![ViT data-parallel profile, NCCL gradient all-reduce during the backward](../../tutorial_images/vit_dp.png)
 
@@ -91,7 +91,7 @@ Typically, as model sizes or activation sizes grow, we can drop the local batch 
 sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big --run_num big
 ```
 
-At the last epoch the 4-GPU run is at 0.837 samples/sec.
+At the last epoch the 4-GPU run is at 0.811 samples/sec.
 
 `short_opt_big_dp16` keeps that local batch of 1 and uses 16 GPUs, so the global batch is 16. We typically do this to train faster (and on larger datasets) The learning rate follows the square-root rule, from `5e-4` to `1e-3` to compensate for the larger global batch.
 
@@ -99,6 +99,6 @@ At the last epoch the 4-GPU run is at 0.837 samples/sec.
 sbatch -N 2 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_big_dp16 --run_num big16
 ```
 
-We observe a throughput of 3.19 samples/sec and hence a larger throughout for data parallel scaling.
+We observe a throughput of 3.23 samples/sec and hence a larger throughout for data parallel scaling.
 
 The next page splits the replica: [Model parallelism](model-parallel.md).
