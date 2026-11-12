@@ -242,7 +242,7 @@ def train(params, writer, local_rank, world_rank, spatial_shard=None):
 
                 optimizer.zero_grad(set_to_none=True)
 
-                if i == 1:
+                if world_rank == 0 and i == 1:
                     # allocator stats only count live tensors, NVML also counts the CUDA context, NCCL buffers
                     # and memory the caching allocator holds but does not use
                     torch.cuda.reset_peak_memory_stats(device)
