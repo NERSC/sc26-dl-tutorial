@@ -102,7 +102,7 @@ Recorded performance, leaving out epoch 1 and the profiled epoch:
 
 We see a significant improvement in throughput, and a reduction in GPU memory usage compared to the FP32 baseline.
 
-The profiled epoch is a run of steps a little under a second each. The forward is about 275 ms, against a step of about 7.7 s in the FP32 baseline. A short host-to-device copy still sits between steps.
+The profiled epoch is a run of steps a little under a second each. The forward is about 274 ms, against a step of about 7.7 s in the FP32 baseline. A short host-to-device copy still sits between steps.
 
 ![ViT short_opt profile, steps in the profiled epoch](../../tutorial_images/vit_short_opt.png)
 
@@ -155,7 +155,7 @@ Recorded performance, leaving out epoch 1 and the profiled epoch:
 - GPU memory: 25.433 GB peak, up from 19.880 GB with the PyTorch loader. Before the first step the device is already at 7.712 GB, against 1.146 GB for `short_opt`. That increase is DALI's copy of the prefetched batches.
 - Throughput: 4.21 samples/sec, up from 3.62 samples/sec.
 
-DALI's copy and its own kernels run on a second CUDA stream while the default stream is still inside the current step. The forward is about 276 ms, and each step is about 870 ms.
+DALI's copy and its own kernels run on a second CUDA stream while the default stream is still inside the current step. The forward is about 278 ms, and each step is about 877 ms.
 
 ![ViT DALI profile, DALI kernels overlapped with the training step](../../tutorial_images/vit_short_opt_dali.png)
 
