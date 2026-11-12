@@ -25,12 +25,7 @@ Join the Slack workspace:
 
 First, complete the following steps:
 
-1. **Clone the repository**
-
-```bash
-git clone https://github.com/NERSC/sc26-dl-tutorial.git
-cd sc26-dl-tutorial
-```
+1. **[Cluster setup](docs/cluster.md)**
 
 2. **Install Nsight Systems**
 
@@ -123,8 +118,6 @@ sbatch -n 1 ./submit.sh --yaml_config ./config/ViT.yaml --config my_vit
 Arguments after the script name are forwarded to `train.py`. Slurm writes the job output to a `.out` file beside the script. `squeue --me` shows the job id.
 
 `expdir` (default `/logs`) is the log path inside the container. The run is written to `<expdir>/<config>/<N>GPU/<run_num>/`.
-
-Open [`start_tensorboard.ipynb`](start_tensorboard.ipynb) on `LOGDIR` to plot the scalars.
 
 Let us begin. Start by submitting the baseline job; this will take several minutes to complete since it is unoptimized and running on a single GPU.
 
