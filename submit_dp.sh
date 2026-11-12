@@ -3,7 +3,7 @@
 #SBATCH --cpus-per-task 96
 #SBATCH --gpus-per-node 8
 #SBATCH --time=00:30:00
-#SBATCH -J vit-era5-dp
+#SBATCH -J sc26
 #SBATCH -o %x-%j.out
 
 DATADIR=${DATADIR:-/fsx/datasets}
@@ -11,6 +11,10 @@ LOGDIR=${LOGDIR:-${HOME}/sc26-dl-tutorial/logs}
 IMAGE=${IMAGE:-/scratch/containers/sc26-pytorch.sqsh}
 mkdir -p ${LOGDIR}
 args=("$@")
+
+# Rename the job to <yaml>_<config>[_<split>] and its output file to <name>_<jobid>.out
+source "${SLURM_SUBMIT_DIR:-${PWD}}/utils/job_name.sh"
+sc26_rename_job "${args[@]}"
 
 export HDF5_USE_FILE_LOCKING=FALSE
 export OMP_NUM_THREADS=1

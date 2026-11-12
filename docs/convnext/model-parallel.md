@@ -30,7 +30,7 @@ Both runs have one DP replica and the same batch of four samples.
 
 The unsharded run builds the model, then runs out of memory in the channel
 MLP's first linear layer during the training forward pass. It does not
-complete an epoch. The relevant lines from `convnext_unsplit-61122753.out` are:
+complete an epoch. The relevant lines from the job output, `convnext_short_mp_<jobid>.out`, are:
 
 ```text
     x = self.fc1(x)
