@@ -180,16 +180,28 @@ def train(params, writer, local_rank, world_rank, world_size):
 
                 optimizer.zero_grad(set_to_none=True)
 
+                if i == 1:
+                    # allocator stats only count live tensors, NVML also counts the CUDA context, NCCL buffers
+                    # and memory the caching allocator holds but does not use
+                    torch.cuda.reset_peak_memory_stats(device)
+                    mem_before_fwd = torch.cuda.memory_allocated(device)
+
                 with torch.cuda.nvtx.range(f"forward"):
                     with autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
                         gen = model(inp)
                         loss = loss_func(gen, tar)
 
-                if world_rank == 0 and i == 1:
-                    all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / (
-                        1024.0 * 1024.0 * 1024.0
+                if world_rank == 0 and i == 1:  # print the mem used
+                    gb = 1024.0 * 1024.0 * 1024.0
+                    saved_gb = (torch.cuda.memory_allocated(device) - mem_before_fwd) / gb
+                    fwd_peak_gb = torch.cuda.max_memory_allocated(device) / gb
+                    reserved_gb = torch.cuda.memory_reserved(device) / gb
+                    all_mem_gb = pynvml.nvmlDeviceGetMemoryInfo(nvml_handle).used / gb
+                    logging.info(
+                        f" Memory after forward pass: activations {saved_gb:.2f} GB, "
+                        f"peak allocated {fwd_peak_gb:.2f} GB, reserved {reserved_gb:.2f} GB, "
+                        f"device total {all_mem_gb:.2f} GB."
                     )
-                    logging.info(f" Memory usage after forward pass: {all_mem_gb} GB.")
 
                 grad_scaler.scale(loss).backward()
                 with torch.cuda.nvtx.range(f"optimizer"):
