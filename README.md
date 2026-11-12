@@ -23,7 +23,17 @@ Join the Slack workspace:
 
 ## Setup
 
-Follow the [cluster walkthrough](docs/cluster.md) to request an account, log in, submit jobs, view TensorBoard metrics, and download profiles to your computer.
+First, complete the following steps:
+
+1. **[Cluster setup](docs/cluster.md)**
+
+2. **Install Nsight Systems**
+
+Jobs write a profile on the compute node. Install [Nsight Systems](https://developer.nvidia.com/nsight-systems) on your own machine so you can open the `.nsys-rep` files.
+
+* **Create an account.** The download needs a free NVIDIA developer login.
+* **Download the host build.** On the [download page](https://developer.nvidia.com/gameworksdownload#?search=nsight%20systems), pick macOS, Windows, or the Linux `.rpm`, `.deb`, or `.run` package.
+* **Install it locally.** Run that installer. Copy a profile back from `LOGDIR` and open it here.
 
 ## Single-GPU Training
 
