@@ -86,6 +86,18 @@ class MLP(nn.Module):
         return x
 
 
+_cp_stream = None
+
+
+def _context_parallel_stream():
+    """One side stream for the ring exchange of all attention layers. The caching allocator keeps a separate pool
+    per stream, so a stream per layer would hold on to a separate set of receive buffers for every layer."""
+    global _cp_stream
+    if _cp_stream is None:
+        _cp_stream = torch.cuda.Stream()
+    return _cp_stream
+
+
 def _context_pad_length(token_counts):
     """Even length TE context parallelism requires, or None when every rank already has it."""
     if comm.get_size("tp-sp1-sp2") <= 1 or not token_counts:
@@ -122,7 +134,7 @@ class Attention(nn.Module):
             spatial_group = comm.get_group("sp1-sp2")
             tp_size = comm.get_size("tp")
             spatial_ranks = torch.distributed.get_process_group_ranks(spatial_group)
-            spatial_stream = torch.cuda.Stream()
+            spatial_stream = _context_parallel_stream()
         else:
             tp_group = None
             spatial_group = None
