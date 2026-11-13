@@ -19,7 +19,7 @@ We focus on four architectures that represent the general architecture space of 
 
 Tutorial slides: https://drive.google.com/drive/folders/14OJ1mMEzsYa1MC2G2jfXJZpbE_HxoKzh?usp=sharing
 
-Join the Slack workspace:
+Join the Slack workspace: https://join.slack.com/t/nersc-dl-tutorial/shared_invite/zt-4glmxatya-tMbqGiAADXeUMa4owi4k1w
 
 ## Setup
 
