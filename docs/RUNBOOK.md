@@ -422,7 +422,7 @@ Profiles: `convnext_mp.0.nsys-rep` through `convnext_mp.15.nsys-rep`.
 
 ## After a run
 
-The throughput lines are in the training log and in the job output. Copy the `.nsys-rep` files into `profiles/` so the reports stay with the tutorial. Save the Nsight screenshot as:
+The throughput lines are in the training log and in the job output. The below images are screenshots used from the profiles.
 
 | Run | Image |
 |---|---|

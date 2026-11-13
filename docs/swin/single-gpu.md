@@ -86,6 +86,8 @@ BF16 shortens the GPU work, and the gaps shrink with it. They are still there. W
 
 ![Swin short_opt profile, shorter steps with gaps still between them](../../tutorial_images/swin_short_opt.png)
 
+*Try out other number of workers - are there better configs?*
+
 ## NVIDIA DALI
 
 `short_opt_dali` keeps those four settings and switches the loader to DALI.

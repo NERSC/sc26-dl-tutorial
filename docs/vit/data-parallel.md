@@ -16,8 +16,6 @@ sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh --yaml_config ./
 sbatch -N 2 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config <name>
 ```
 
-*Why one process per GPU, rather than one process per node that owns all of its GPUs?*
-
 DDP can form its process group in several ways. This code uses environment variables. The `torchrun` instances on the nodes rendezvous at the first node of the job (`--rdzv_endpoint`), agree on the global layout, and give each worker its `RANK`, `LOCAL_RANK`, `WORLD_SIZE`, and the master address and port. Near the bottom of `train.py`, `torch.distributed.init_process_group` reads those and brings NCCL up.
 
 Each rank has to see its own slice of the global batch, of size `global_batch_size / world_size`. The slice is built by `DistributedSampler` in [`utils/data_loader.py`](../../utils/data_loader.py). Find that constructor and check which of `data_num_shards` and `data_shard_id` it receives.
@@ -34,7 +32,7 @@ The wrapper broadcasts the initial weights so every rank starts from the same po
 
 DDP's buckets are the reason the all-reduces show up in the middle of the backward rather than as one blob after it. The bucket size is `bucket_cap_mb` on the `DistributedDataParallel` constructor (PyTorch's default is 25 MB). A smaller bucket flushes more often, so the profile shows more, shorter, syncs.
 
-*If the code skipped DDP and called `torch.distributed.all_reduce` on the gradients once, just before the optimizer step, where would that sync sit in the profile?*
+*If the code skipped DDP and called* `torch.distributed.all_reduce` *on the gradients once, just before the optimizer step, where would that sync sit in the profile?*
 
 ## Scaling the batch
 
@@ -44,7 +42,7 @@ Hold the local batch fixed and let the global batch grow with the GPU count. A l
 
 *If you raise the learning rate and leave the batch size alone, what do you expect instead?*
 
-*As the GPU count grows, what happens to samples per second, and what happens to how fast the loss actually falls? Which scale finishes a fixed number of samples sooner, and which spends less GPU-time? Can you write a block that overfits, or one that diverges?*
+*As the GPU count grows, what happens to samples per second, and what happens to how fast the loss actually falls?* 
 
 Each network's file will have a data-parallel block of this shape. In [`config/ViT.yaml`](../../config/ViT.yaml) that block is `short_opt_dali_dp`: the optimized ViT, global batch 16 on 4 GPUs, so the local batch stays 4. The learning rate is still the single-GPU value, `5e-4`.
 
@@ -100,5 +98,19 @@ sbatch -N 2 ./submit_dp.sh --yaml_config ./config/ViT.yaml --config short_opt_bi
 ```
 
 We observe a throughput of 3.23 samples/sec and hence a larger throughout for data parallel scaling.
+
+*What do the loss curves look like? Are they converging? What happens if you do not limit the number of samples?*
+
+In this tutorial, we focus on simple datasets with limited number of samples. In practices, especially for Transformer type models, we often need much larger datasets with higher complexity to observe good convergence properties. However, the focus here is to demonstrate performance and scaling properties of the models.
+
+Increase number of samples by defining a new config to train the model for more number of samples. For example:
+
+```yaml
+opt_big_samples:
+  <<: *short_opt_big
+  limit_nsamples: 1024
+  limit_nsamples_val: 256
+  num_iters: 30000
+```
 
 The next page splits the replica: [Model parallelism](model-parallel.md).

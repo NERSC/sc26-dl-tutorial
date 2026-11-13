@@ -57,4 +57,6 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/swin_big16/out.log`.
 
 After the first epoch the run holds 24.2 samples/sec, up from 6.50 on 4 GPUs. The forward peaks at 36.218 GB.
 
+*What do the loss curves look like?*
+
 The next page splits the replica: [Model parallelism](model-parallel.md).

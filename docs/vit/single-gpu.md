@@ -61,13 +61,15 @@ Zoomed into one step, the host read of the next batch finishes before the GPU wo
 
 Workers remove the gap between steps. The copy of the batch onto the GPU is still on the same CUDA stream as the compute, so it still sits at the front of the step. Prefetching that copy on its own stream is possible in plain PyTorch. A worked example is the [prefetching loader in NVIDIA's ConvNet examples](https://github.com/NVIDIA/DeepLearningExamples/blob/41f582bd9f65f6ebede77532b7cd64f038a8a380/PyTorch/Classification/ConvNets/image_classification/dataloaders.py#L354). DALI does that overlap in the next section.
 
-The baseline step is FP32. Automatic mixed precision (AMP) runs the eligible ops in FP16 or BF16 and keeps the rest in FP32, which turns on tensor cores. `train.py` uses two pieces from `torch.amp`. `autocast` picks the dtype of each op. `GradScaler` scales the loss so FP16 gradients, which have a narrow range, do not underflow. BF16 has the same exponent range as FP32, so BF16 needs no loss scaling. `amp_mode: bf16` is the setting used here. `amp_mode: fp16` is the path that turns the scaler on. The FNO's spectral weights are complex, and the scaler cannot unscale them, so the FNO configs stay on BF16.
+The baseline step is FP32. Automatic mixed precision (AMP) runs the eligible ops in FP16 or BF16 and keeps the rest in FP32, which turns on tensor cores. `train.py` uses two pieces from `torch.amp`. `autocast` picks the dtype of each op. `GradScaler` scales the loss so FP16 gradients, which have a narrow range, do not underflow. BF16 has the same exponent range as FP32, so BF16 needs no loss scaling. `amp_mode: bf16` is the setting used here. `amp_mode: fp16` is the path that turns the scaler on. 
 
 Tensor cores are already in use for FP32 GEMMs through TF32, which PyTorch enables by default for cuDNN and cuBLAS. `NVIDIA_TF32_OVERRIDE=0` turns TF32 off. The baseline should slow down. TF32 only changes the math inside the kernel. The activations and weights stay FP32, so the traffic to memory is unchanged. FP16 and BF16 cut that traffic as well as the math, which is why AMP still wins on top of TF32. The forward and the backward both shrink, because these networks spend their time in GEMMs.
 
 `enable_fused: true` selects the fused Adam implementation in `torch.optim.Adam`. That update used to live in [APEX](https://github.com/NVIDIA/apex). It is in PyTorch now. One kernel applies the moment updates and the weight write, instead of a chain of small kernels, which cuts launch latency and keeps the values in registers.
 
-`enable_jit: true` wraps the model in `torch.compile`, which fuses the elementwise ops around those GEMMs. Because the step is dominated by large GEMMs, fusing the surrounding kernels is a smaller win than AMP, and it still shows up. The FNO block leaves `enable_fused` off. Fused Adam does not update its complex spectral weights.
+`enable_jit: true` wraps the model in `torch.compile`, which fuses the elementwise ops around those GEMMs. Because the step is dominated by large GEMMs, fusing the surrounding kernels is a smaller win than AMP, and it still shows up. 
+
+Run this:
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=vit_short_opt \

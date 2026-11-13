@@ -25,11 +25,6 @@ Both runs use [train_mp.py](../../train_mp.py) and four data-parallel replicas,
 so each replica processes one sample per step. Spatial splitting distributes
 that sample's feature map across GPUs; it does not divide the batch.
 
-| Run | GPUs | DP replicas | Spatial split | Local / global batch |
-|---|---|---|---|---|
-| No split | 4 | 4 | `sp1=1, sp2=1` | 1 / 4 |
-| Spatial parallel | 16 | 4 | `sp1=4, sp2=1` | 1 / 4 |
-
 ## No split
 
 Start with one complete model and one sample per GPU. This is the
@@ -71,3 +66,20 @@ Profiles: `convnext_mp.0.nsys-rep` through `convnext_mp.15.nsys-rep`.
 Submit this job. Compare memory use with the unsharded run, check that
 training and validation complete, and inspect the profile for halo exchanges
 during the forward pass and gradient synchronization during backward.
+
+## Spatial parallel data loading (optional)
+
+A local tile read can help when the field is large. Each rank reads an HDF5
+hyperslab of its own tile, input and target, and no collective follows. One
+4096×4096 sample is 256 MB; the four-way height split brings that read down to
+64 MB per rank. On a small image the saving is too small to pay for the
+hyperslab. These runs leave `sp2=1`, so each local read is a block of whole
+rows. With `sp2` greater than 1, that same local read takes a width tile: a
+strided hyperslab in the file, and a slow read.
+
+ConvNeXt turns this on. `base` in [ConvNeXt.yaml](../../config/ConvNeXt.yaml)
+sets `spatial_read_mode: local`, and `short_mp` inherits it. ViT and Swin leave
+the key at `all`, which reads the full field and keeps this rank's tile. The
+FNO config is also `local`. Toggle the key to `all` on the sixteen-GPU job and
+compare the data-load gap in the profile, to see where the tile read helps.
+

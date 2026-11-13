@@ -2,7 +2,7 @@
 
 [Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Data parallel](data-parallel.md)
 
-The mesh is the same one documented on the [ViT model-parallel page](../vit/model-parallel.md): `dp × tp × sp1 × sp2`, with column-parallel and row-parallel linears over `tp`. Swin keeps `sp1` and `sp2` as separate spatial axes. A block of windows lives on each spatial rank, and the shifted-window blocks exchange the cells that cross a rank boundary through `roll_forward_reverseroll_backward` in [`networks/swin_mp.py`](../../networks/swin_mp.py). `window_size` has to divide the patch grid on each spatial rank. 
+The mesh is the same one documented on the [ViT model-parallel page](../vit/model-parallel.md): `dp × tp × sp1 × sp2`, with column-parallel and row-parallel linears over `tp`. Swin keeps `sp1` and `sp2` as separate spatial axes. A block of windows lives on each spatial rank. Heads are the tensor-parallel axis. The shifted-window blocks exchange the cells that cross a rank boundary through `roll_forward_reverseroll_backward` in [`networks/swin_mp.py`](../../networks/swin_mp.py): the forward rolls those cells across, and the backward rolls the gradient back. `window_size` has to divide the patch grid on each spatial rank. 
 
 ## No split
 

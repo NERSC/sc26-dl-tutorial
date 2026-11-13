@@ -2,7 +2,7 @@
 
 [Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Data parallel](data-parallel.md)
 
-The mesh is the same one documented on the [ViT model-parallel page](../vit/model-parallel.md): `dp × tp × sp1 × sp2`. The FNO keeps `sp1` and `sp2` as separate spatial axes. Height is sharded over `sp1` and width over `sp2`. The spectral layer is a pencil FFT: an all-to-all swaps which axis is sharded, the retained modes are mixed, and the inverse transpose comes back in the backward. The spectral weights are sharded over those same modes. `--tp=1`, because tensor parallelism shards only the pointwise channel MLP. [`networks/fno_mp.py`](../../networks/fno_mp.py) is the model.
+The mesh is the same one documented on the [ViT model-parallel page](../vit/model-parallel.md): `dp × tp × sp1 × sp2`. The FNO keeps `sp1` and `sp2` as separate spatial axes. Height is sharded over `sp1` and width over `sp2`. The spectral layer is a pencil FFT: `distributed_transpose` swaps which axis is sharded, the retained modes are mixed, and the inverse transpose comes back in the backward. Those transposes also split the channels, so the channel count has to be at least `sp1` and at least `sp2`. The spectral weights are sharded over the same modes. `--tp=1`, because tensor parallelism applies only to the pointwise channel MLP. [`networks/fno_mp.py`](../../networks/fno_mp.py) is the model.
 
 ## No split
 
