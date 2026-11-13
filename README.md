@@ -85,7 +85,7 @@ One YAML file per network. A run is that file plus one named block:
 | [`config/ViT.yaml`](config/ViT.yaml) | `short` (and `base` for a long run) |
 | [`config/swin.yaml`](config/swin.yaml) | `short` (and `base`) |
 | [`config/FNO.yaml`](config/FNO.yaml) | `short` (and `base`). `downsample: 4` runs the blocks on a 1024×1024 latent grid. |
-| [`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) | `short` (existing `small` and `big` are also available) |
+| [`config/ConvNeXt.yaml`](config/ConvNeXt.yaml) | `short` (and `base`) |
 
 The same files will grow a matching block for the optimized loader, for data parallelism, and for spatial parallelism. The architecture pages point at those blocks as they are filled in.
 
@@ -149,9 +149,6 @@ More GPUs, each still holding a full copy of the model.
 - Raise the learning rate with the global batch.
 
 [ViT](docs/vit/data-parallel.md) · [Swin](docs/swin/data-parallel.md) · [FNO](docs/fno/data-parallel.md) · [ConvNeXt](docs/convnext/data-parallel.md)
-
-ConvNeXt keeps local batch 4 for both DP measurements. Submission commands are
-in the [ConvNeXt runbook](docs/RUNBOOK.md#convnext).
 
 ### 3. Scale with model parallelism
 

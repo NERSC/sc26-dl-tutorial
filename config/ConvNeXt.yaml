@@ -1,5 +1,4 @@
-# Single-GPU model
-small: &small
+base: &base
   network: 'convnext'
   model_backend: 'pytorch'
   patch_size: 32
@@ -11,9 +10,9 @@ small: &small
   img_size: [4096, 4096]
   dt: 1
   global_batch_size: 4
-  num_iters: 4096
-  amp_mode: bf16
-  enable_fused: true
+  num_iters: 30000
+  amp_mode: none
+  enable_fused: false
   enable_jit: false
   expdir: '/logs'
   lr_schedule: 'cosine'
@@ -21,33 +20,24 @@ small: &small
   warmup: 0
   optimizer: 'Adam'
 
-  data_loader_config: 'dali'
-  num_data_workers: 2
+  data_loader_config: 'pytorch'
+  num_data_workers: 0
   spatial_read_mode: 'local'
   n_in_channels: 2
   n_out_channels: 2
   data_path: '/data'
   stats_path: '/data/stats_trajectory.h5'
-  limit_nsamples: 1024
-  limit_nsamples_val: 32
+  limit_nsamples: None
+  limit_nsamples_val: None
 
   wireup_info: env
   wireup_store: tcp
 
-big:
-  <<: *small
-  patch_size: 16
-  embed_dim: 1536
-  depth: 16
-  global_batch_size: 4
-  num_iters: 768
-
-# Tutorial: 256 training samples and five scheduled epochs.
 short: &short
-  <<: *small
-  limit_nsamples: 256
-  limit_nsamples_val: 32
-  num_iters: 320  # 5 * (256 / 4)
+  <<: *base
+  limit_nsamples: 64
+  limit_nsamples_val: 16
+  num_iters: 80
   data_loader_config: 'pytorch'
   num_data_workers: 0
   amp_mode: none
@@ -56,7 +46,7 @@ short: &short
 
 short_opt:
   <<: *short
-  num_data_workers: 4
+  num_data_workers: 2
   amp_mode: bf16
   enable_fused: true
   enable_jit: true
@@ -64,24 +54,15 @@ short_opt:
 short_opt_dali: &short_opt_dali
   <<: *short
   data_loader_config: 'dali'
-  num_data_workers: 4
+  num_data_workers: 2
   amp_mode: bf16
   enable_fused: true
   enable_jit: true
 
-# Local batch 4; lr = 5e-4 * sqrt(global batch / 4).
-short_opt_dali_dp4:
+# Local batch 4 on four GPUs.
+short_opt_dali_dp:
   <<: *short_opt_dali
   global_batch_size: 16
-  num_iters: 80  # 5 * (256 / 16)
-  lr: 1.0E-3
-
-short_opt_dali_dp16:
-  <<: *short_opt_dali
-  global_batch_size: 64
-  num_iters: 20  # 5 * (256 / 64)
-  lr: 2.0E-3
-  limit_nsamples_val: 128  # Two validation batches per rank with local batch 4.
 
 # Larger model at local batch 1 on 4 GPUs.
 short_opt_big: &short_opt_big
@@ -90,49 +71,19 @@ short_opt_big: &short_opt_big
   embed_dim: 1024
   depth: 12
   global_batch_size: 4
-  num_iters: 320  # 5 * (256 / 4)
 
 # lr = 5e-4 * sqrt(16 / 4). Local batch stays 1 on 16 GPUs.
 short_opt_big_dp16:
   <<: *short_opt_big
   global_batch_size: 16
-  num_iters: 80  # 5 * (256 / 16)
   lr: 1.0E-3
 
-# Spatial parallelism: compare 1MP with 4MP at batch 4 using train_mp.py
-# in both cases. tp=1 throughout.
+# 16 GPUs: four replicas, each spatially split across four GPUs.
 short_mp: &short_mp
-  <<: *short_opt_dali
+  <<: *short_opt_big
   patch_size: 16
-  embed_dim: 768
-  depth: 12
+  embed_dim: 1536
+  depth: 16
+  global_batch_size: 4
   num_data_workers: 2
   enable_jit: false
-
-short_mp_w1024: &short_mp_w1024
-  <<: *short_mp
-  embed_dim: 1024
-
-short_mp_w1024_d16: &short_mp_w1024_d16
-  <<: *short_mp_w1024
-  depth: 16
-
-# Four replicas of the selected four-way SP model: 16 GPUs, local batch 4.
-# lr = 5e-4 * sqrt(16 / 4) = 1e-3.
-short_mp_dp4:
-  <<: *short_mp
-  global_batch_size: 16
-  num_iters: 80
-  lr: 1.0E-3
-
-short_mp_w1024_dp4:
-  <<: *short_mp_w1024
-  global_batch_size: 16
-  num_iters: 80
-  lr: 1.0E-3
-
-short_mp_w1024_d16_dp4:
-  <<: *short_mp_w1024_d16
-  global_batch_size: 16
-  num_iters: 80
-  lr: 1.0E-3
