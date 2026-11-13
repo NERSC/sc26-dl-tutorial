@@ -1,80 +1,67 @@
 # ConvNeXt: data parallelism
 
-[Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Spatial parallel](model-parallel.md) · [Runbook](../RUNBOOK.md#convnext)
+[Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Spatial parallel](model-parallel.md)
 
-Each GPU holds the full patch-32, width-512, depth-12, kernel-7 ConvNeXt and
-receives different samples. [train.py](../../train.py) uses
-DistributedDataParallel to average gradients. Keep the optimized single-GPU
-settings: BF16 autocast, fused Adam, compilation, and DALI with four workers.
+Each GPU holds a full copy of the model and receives different samples.
+[submit_dp.sh](../../submit_dp.sh) launches [train.py](../../train.py) with
+one process per GPU, and DistributedDataParallel averages the gradients.
+Keep BF16, fused Adam, compilation, and DALI with two workers enabled.
 
-| Config | Nodes / GPUs | Local / global train batch | Learning rate | Train / validation batches per epoch | Updates for 5 epochs |
-|---|---|---|---|---|---|
-| `short_opt_dali` | 1 / 1 | 4 / 4 | `5e-4` | 64 / 8 | 320 |
-| `short_opt_dali_dp4` | 1 / 4 | 4 / 16 | `1e-3` | 16 / 2 | 80 |
-| `short_opt_dali_dp16` | 2 / 16 | 4 / 64 | `2e-3` | 4 / 2 | 20 |
+## Scaling the batch
 
-The learning rate is `5e-4 * sqrt(global_batch / 4)`: factors 2 and 4 at
-global batches 16 and 64. Each run covers five scheduled epochs, with a cosine
-learning-rate schedule over the listed number of updates.
+`short_opt_dali_dp` keeps patch 32, width 512, depth 12, and kernel 7.
+Global batch 16 on four GPUs gives local batch 4, matching the single-GPU
+DALI run. The learning rate stays `5e-4`. With 64 training and 16 validation
+samples, 80 iterations schedule twenty epochs.
 
-The 1- and 4-GPU runs validate on 32 samples. The 16-GPU config uses 128 so
-each rank has two validation batches of 4.
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp4 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh \
+    --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp --run_num convnext_dp4
+```
 
-## Scaling
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp/4GPU/convnext_dp4/out.log`.
 
-Recorded performance, leaving out epoch 1 and the profiled epoch:
+Profiles: `convnext_dp4.0.nsys-rep` through `convnext_dp4.3.nsys-rep`.
 
-| GPUs | Global batch | Throughput (samples/sec) | GPU memory after forward (GB) |
-|---|---|---|---|
-| 1 | 4 | 11.26 | 23.129 |
-| 4 | 16 | 59.97 | 23.256 |
-| 16 | 64 | 170.82 | 22.834 |
-
-The trainer reports global throughput. Memory stays close to the single-GPU
-run because each GPU still holds the same model and local batch of four.
-
-## Four GPUs
-
-![ConvNeXt DP4 rank 0 training profile](../../tutorial_images/convnext_dp4.png)
-
-Profile: `convnext_dp4.0.nsys-rep`. Gradient synchronization adds NCCL calls
-during backward. Training and validation complete all five epochs, with
-validation loss falling from 0.2786 to 0.1238.
-
-## Sixteen GPUs
-
-`short_opt_dali_dp16` reaches 170.82 samples/sec, 2.85× the four-GPU rate.
-Each rank runs four training steps per epoch. The visible steps in
-`convnext_dp16.0.nsys-rep` are closely packed, at about 159–162 ms each.
-
-![ConvNeXt DP16 rank 0, consecutive training steps across two nodes](../../tutorial_images/convnext_dp16.png)
-
-This run also completes five epochs of training and validation. Validation
-loss falls from 0.4162 to 0.2585. The larger global batch makes fewer optimizer
-updates over the same training samples, and this run uses the larger validation
-set described above.
+Submit this job. Compare global throughput with the single-GPU DALI run,
+and look for gradient synchronization during backward in the profile.
 
 ## A larger model at local batch 1
 
-`short_opt_big` uses patch 16, width 1024, and depth 12. The feature grid
-grows to 256×256. Global batch 4
-on four GPUs gives local batch 1. BF16, fused Adam, compilation, kernel 7,
-and DALI with four workers stay enabled.
+`short_opt_big` uses patch 16, width 1024, depth 12, and kernel 7. The feature
+grid grows to 256×256. Global batch 4 on four GPUs gives local batch 1.
+The run uses 64 training and 16 validation samples, with 80 iterations
+scheduling five epochs.
 
-The larger model increases computation per sample, aiming to keep the GPU
-busy while the loader prepares the next batch. Check the memory reported in
-the log and the gaps between steps in `convnext_big.0.nsys-rep`; its fit and
-utilization still need to be measured on the AWS cluster.
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_dp.sh \
+    --yaml_config ./config/ConvNeXt.yaml --config short_opt_big --run_num convnext_big
+```
 
-| Config | GPUs | Local / global batch | Learning rate | Iterations / epochs |
-|---|---|---|---|---|
-| `short_opt_big` | 4 | 1 / 4 | `5e-4` | 320 / 5 |
-| `short_opt_big_dp16` | 16 | 1 / 16 | `1e-3` | 80 / 5 |
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/convnext_big/out.log`.
 
-Both use 256 training and 32 validation samples. The 16-GPU configuration
-keeps the same model and local batch, scaling the learning rate by
-`sqrt(16 / 4)`. Both runs capture epoch 4; check the four-GPU run before
-scaling to sixteen GPUs.
+Profiles: `convnext_big.0.nsys-rep` through `convnext_big.3.nsys-rep`.
 
-The [runbook](../RUNBOOK.md#convnext) has the submission commands and output
-paths. Continue with [spatial parallelism](model-parallel.md).
+Submit this job. Check memory use and GPU activity with the larger model.
+
+`short_opt_big_dp16` keeps the same model and local batch 1 on sixteen GPUs.
+Global batch becomes 16, and the learning rate is `1e-3`, from
+`5e-4 * sqrt(16 / 4)`. The sample counts stay the same; 80 iterations schedule
+twenty epochs.
+
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big16 \
+sbatch -N 2 ./submit_dp.sh \
+    --yaml_config ./config/ConvNeXt.yaml --config short_opt_big_dp16 --run_num convnext_big16
+```
+
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/convnext_big16/out.log`.
+
+Profiles: `convnext_big16.0.nsys-rep` through `convnext_big16.15.nsys-rep`.
+
+Submit this job. Compare its throughput with the four-GPU run to measure
+scaling at the same local batch. Use epochs 2, 3, and 5 for both comparisons.
+
+Continue with [spatial parallelism](model-parallel.md).

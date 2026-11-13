@@ -305,7 +305,8 @@ Profiles: `fno_mp.0.nsys-rep` through `fno_mp.15.nsys-rep`.
 
 The single-GPU ladder uses patch 32, width 512, depth 12, kernel 7, and batch 4.
 Data parallelism starts at local batch 4, then uses a larger model at local
-batch 1. Spatial parallelism uses patch 16 and width 768, with `tp=1`.
+batch 1. Spatial parallelism uses patch 16, width 1536, depth 16, and global
+batch 4, with `tp=1`.
 
 ### 1. Baseline — `short`, 1 GPU
 
@@ -337,42 +338,26 @@ sbatch -N 1 -n 1 --ntasks-per-node=1 --time=00:30:00 \
 
 Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali/1GPU/convnext_dali/out.log`
 
-### 4. Data parallel — `short_opt_dali_dp4`, 4 GPUs
+### 4. Data parallel — `short_opt_dali_dp`, 4 GPUs
 
-Global batch 16, local batch 4. The learning rate is `1e-3`, from
-`5e-4 * sqrt(16 / 4)`. `num_iters: 80` schedules five epochs.
+Global batch 16, local batch 4, learning rate `5e-4`. With 64 training
+and 16 validation samples, `num_iters: 80` schedules twenty epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp4 \
 sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 \
-    ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp4 --run_num convnext_dp4
+    ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp --run_num convnext_dp4
 ```
 
-Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp4/4GPU/convnext_dp4/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp/4GPU/convnext_dp4/out.log`
 
 Profiles: `convnext_dp4.0.nsys-rep` through `convnext_dp4.3.nsys-rep`.
 
-### 5. Data parallel — `short_opt_dali_dp16`, 16 GPUs
-
-Global batch 64, local batch 4. The learning rate is `2e-3`, from
-`5e-4 * sqrt(64 / 4)`. `num_iters: 20` schedules five epochs. This run uses
-128 validation samples so each rank has two batches; the other runs use 32.
-
-```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_dp16 \
-sbatch -N 2 --time=00:30:00 \
-    ./submit_dp.sh --yaml_config ./config/ConvNeXt.yaml --config short_opt_dali_dp16 --run_num convnext_dp16
-```
-
-Log: `$HOME/sc26-dl-tutorial/logs/short_opt_dali_dp16/16GPU/convnext_dp16/out.log`
-
-Profiles: `convnext_dp16.0.nsys-rep` through `convnext_dp16.15.nsys-rep`.
-
-### 6. Large model, local batch 1 — `short_opt_big`, 4 GPUs
+### 5. Large model, local batch 1 — `short_opt_big`, 4 GPUs
 
 Patch 16, width 1024, depth 12, kernel 7. Global batch 4 makes the local batch
-1. BF16, fused Adam, compilation, and DALI with four workers remain enabled.
-The run uses 256 training and 32 validation samples, with 320 iterations for
+1. BF16, fused Adam, compilation, and DALI with two workers remain enabled.
+The run uses 64 training and 16 validation samples, with 80 iterations for
 five epochs. Check memory use and GPU activity in this run before scaling out.
 
 ```bash
@@ -385,11 +370,11 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big/4GPU/convnext_big/out.log`
 
 Profiles: `convnext_big.0.nsys-rep` through `convnext_big.3.nsys-rep`.
 
-### 7. Large model, 16 GPUs — `short_opt_big_dp16`
+### 6. Large model, 16 GPUs — `short_opt_big_dp16`
 
 Same model and local batch 1. Global batch 16, learning rate `1e-3`, from
 `5e-4 * sqrt(16 / 4)`. The sample counts stay the same; 80 iterations schedule
-five epochs.
+twenty epochs.
 
 ```bash
 ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_big16 \
@@ -401,54 +386,39 @@ Log: `$HOME/sc26-dl-tutorial/logs/short_opt_big_dp16/16GPU/convnext_big16/out.lo
 
 Profiles: `convnext_big16.0.nsys-rep` through `convnext_big16.15.nsys-rep`.
 
-### 8. Out of memory, no spatial split — `short_mp`, 1 GPU
+### 7. No spatial split, local batch 1 — `short_mp`, 4 GPUs
 
-Patch 16, width 768, depth 12, batch 4. This uses `train_mp.py` with no split,
-BF16, fused Adam, DALI with two workers, and eager execution. Profiling is off.
-The training forward runs out of memory in the channel MLP's first linear layer.
+Patch 16, width 1536, depth 16, kernel 7: 304.996M parameters. Global batch 4
+across four DP replicas gives local batch 1. BF16, fused Adam, DALI with two
+workers, and eager execution are enabled. Check the job output to see whether
+the full model fits at local batch 1.
 
 ```bash
 ENABLE_PROFILING=0 \
-sbatch -N 1 --gpus-per-node=1 \
-    --time=00:30:00 ./submit_mp.sh \
-    --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_unsplit \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 --time=00:30:00 \
+    ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_oom \
     --tp=1 --sp1=1 --sp2=1
 ```
 
-Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/convnext_unsplit/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/convnext_oom/out.log`
 
-### 9. Spatial parallel — `short_mp`, 4 GPUs
+### 8. Spatial parallel, local batch 1 — `short_mp`, 16 GPUs
 
-The same model and batch, split across four GPUs on one node. `sp1=4` divides
-the 256×256 feature grid into 64×256 tiles. Weights remain replicated.
-This run fits and completes training and validation.
-
-```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4 \
-sbatch -N 1 --gpus-per-node=4 --cpus-per-task=48 --time=00:30:00 \
-    ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_sp4 \
-    --tp=1 --sp1=4 --sp2=1
-```
-
-Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/convnext_sp4/out.log`
-
-Profiles: `convnext_sp4.0.nsys-rep` through `convnext_sp4.3.nsys-rep`.
-
-### 10. Spatial and data parallel — `short_mp_dp4`, 16 GPUs
-
-Two nodes hold four spatially sharded replicas (`dp=4`). Local batch stays 4,
-global batch becomes 16, and `lr=1e-3`. `num_iters: 80` schedules five epochs.
+Same model, global batch 4, and learning rate `5e-4`. Four-way spatial splitting
+leaves four DP replicas on sixteen GPUs, each processing one sample. Two
+8-GPU nodes hold the replicas. Both runs use 64 training and 16 validation
+samples, with 80 iterations for five epochs.
 
 ```bash
-ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_sp4_dp4 \
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_mp \
 sbatch -N 2 --time=00:30:00 \
-    ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp_dp4 --run_num convnext_sp4_dp4 \
+    ./submit_mp.sh --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_mp \
     --tp=1 --sp1=4 --sp2=1
 ```
 
-Log: `$HOME/sc26-dl-tutorial/logs/short_mp_dp4/4MP/convnext_sp4_dp4/out.log`
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/convnext_mp/out.log`
 
-Profiles: `convnext_sp4_dp4.0.nsys-rep` through `convnext_sp4_dp4.15.nsys-rep`.
+Profiles: `convnext_mp.0.nsys-rep` through `convnext_mp.15.nsys-rep`.
 
 ## After a run
 
@@ -477,9 +447,7 @@ The throughput lines are in the training log and in the job output. Copy the `.n
 | `convnext` `short` | `tutorial_images/convnext_short_step.png` |
 | `convnext` `short_opt` | `tutorial_images/convnext_short_opt.png` |
 | `convnext` `short_opt_dali` | `tutorial_images/convnext_short_opt_dali.png` |
-| `convnext` `short_opt_dali_dp4` | `tutorial_images/convnext_dp4.png` |
-| `convnext` `short_opt_dali_dp16` | `tutorial_images/convnext_dp16.png` |
+| `convnext` `short_opt_dali_dp` | `tutorial_images/convnext_dp4.png` |
 | `convnext` `short_opt_big` | `tutorial_images/convnext_big.png` |
 | `convnext` `short_opt_big_dp16` | `tutorial_images/convnext_big16.png` |
-| `convnext` `short_mp` | `tutorial_images/convnext_sp4.png` |
-| `convnext` `short_mp_dp4` | `tutorial_images/convnext_sp4_dp4.png` |
+| `convnext` `short_mp` | `tutorial_images/convnext_mp.png` |

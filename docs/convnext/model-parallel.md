@@ -1,6 +1,6 @@
 # ConvNeXt: spatial parallelism
 
-[Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Data parallel](data-parallel.md) · [Runbook](../RUNBOOK.md#convnext)
+[Tutorial](../../README.md) · [Single GPU](single-gpu.md) · [Data parallel](data-parallel.md)
 
 [convnext_mp.py](../../networks/convnext_mp.py) splits feature maps across
 spatial tiles. Weights, gradients, and optimizer states remain replicated.
@@ -14,75 +14,60 @@ corners. Global edges keep the serial model's zero padding. Backward returns
 and sums the halo gradients. The channel MLP and normalization stay local;
 weight gradients are summed across spatial ranks and averaged across replicas.
 
-## A larger model
+## A larger model at local batch 1
 
-`short_mp` uses patch 16, width 768, depth 12, kernel 7, BF16, fused Adam,
-DALI with two workers, and eager execution. The feature grid is 256×256.
-The batch is 4, with 256 training and 32 validation samples. `num_iters: 320`
-schedules five epochs.
+`short_mp` uses patch 16, width 1536, depth 16, and kernel 7: 304.996 million
+parameters. BF16, fused Adam, DALI with two workers, and eager execution are
+enabled. The feature grid is 256×256. Global batch stays 4, with 64 training
+and 16 validation samples; 80 iterations schedule five epochs.
 
-Both the unsharded and spatial runs use [train_mp.py](../../train_mp.py).
-On one GPU, `tp=1, sp1=1, sp2=1` keeps the complete field on the device.
-On four GPUs, `tp=1, sp1=4, sp2=1` gives each rank a 64×256 feature tile.
-Both runs have one DP replica and the same batch of four samples.
+Both runs use [train_mp.py](../../train_mp.py) and four data-parallel replicas,
+so each replica processes one sample per step. Spatial splitting distributes
+that sample's feature map across GPUs; it does not divide the batch.
+
+| Run | GPUs | DP replicas | Spatial split | Local / global batch |
+|---|---|---|---|---|
+| No split | 4 | 4 | `sp1=1, sp2=1` | 1 / 4 |
+| Spatial parallel | 16 | 4 | `sp1=4, sp2=1` | 1 / 4 |
 
 ## No split
 
-The unsharded run builds the model, then runs out of memory in the channel
-MLP's first linear layer during the training forward pass. It does not
-complete an epoch. The relevant lines from the job output, `convnext_short_mp_<jobid>.out`, are:
+Start with one complete model and one sample per GPU. This is the
+batch-1 memory comparison for the large model.
 
-```text
-    x = self.fc1(x)
-    ...
-    return F.linear(input, self.weight, self.bias)
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.50 GiB.
+```bash
+ENABLE_PROFILING=0 \
+sbatch -N 1 --gpus-per-node 4 --cpus-per-task 48 ./submit_mp.sh \
+    --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_oom \
+    --tp=1 --sp1=1 --sp2=1
 ```
 
-## Four-way spatial split
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/1MP/convnext_oom/out.log`.
 
-`sp1=4` fits the same model and batch on four GPUs of one node. It completes all
-five epochs of training and validation. The local parameter count remains
-57.948 M, because spatial splitting keeps the weights replicated.
+Submit this job. Check whether the full model fits at local batch 1 and
+inspect the job output if it runs out of memory.
 
-Recorded performance, leaving out epoch 1 and the profiled epoch:
+## Four-way spatial split on sixteen GPUs
 
-- GPU memory: 27.561 GB after the forward pass.
-- Throughput: 15.12 samples/sec across 4 GPUs.
-- Validation loss: 0.1449 in epoch 1, falling to 0.0493 in epoch 5.
+Keep the same model and global batch, and split each replica across four GPUs.
+Each rank holds a 64×256 feature tile. Two eight-GPU nodes hold four replicas,
+with local batch 1 and global batch 4. The learning rate remains `5e-4`.
 
-The steps in `convnext_sp4.0.nsys-rep` are about 264 ms and sit next to one
-another. The NCCL row shows the repeated calls during the forward for halo
-exchange, followed by communication during backward.
+```bash
+ENABLE_PROFILING=1 PROFILE_OUTPUT=convnext_mp \
+sbatch -N 2 ./submit_mp.sh \
+    --yaml_config ./config/ConvNeXt.yaml --config short_mp --run_num convnext_mp \
+    --tp=1 --sp1=4 --sp2=1
+```
 
-![ConvNeXt four-way spatial profile, consecutive steps with NCCL calls during the forward](../../tutorial_images/convnext_sp4.png)
+The default rank order, `tp-sp1-sp2-dp`, keeps each spatial group within a node.
+The trainer infers the number of data-parallel replicas from the GPU count
+and spatial mesh.
 
-## Four replicas across two nodes
+Log: `$HOME/sc26-dl-tutorial/logs/short_mp/4MP/convnext_mp/out.log`.
 
-`short_mp_dp4` keeps the same model and `tp=1, sp1=4, sp2=1`. Sixteen GPUs
-leave `dp=4`: four replicas, each split across four GPUs, two replicas per
-8-GPU node. Local batch stays 4
-and global batch becomes 16. The learning rate is `1e-3`, from
-`5e-4 * sqrt(16 / 4)`. There are 16 training and 2 validation batches per epoch,
-so `num_iters: 80` schedules five epochs.
+Profiles: `convnext_mp.0.nsys-rep` through `convnext_mp.15.nsys-rep`.
 
-The default rank order, `tp-sp1-sp2-dp`, keeps each spatial group within one
-node. The trainer infers DP size from world size and the spatial mesh.
-
-Recorded performance, leaving out epoch 1 and the profiled epoch:
-
-- GPU memory: 26.725 GB after the forward pass.
-- Throughput: 57.65 samples/sec across 16 GPUs.
-- Validation loss: 0.2241 in epoch 1, falling to 0.1131 in epoch 5.
-
-The four replicas give a 3.81× throughput increase over one replica, or
-95.3% scaling efficiency. Training and validation complete all five epochs.
-The local parameter count is still 57.948 M.
-
-In `convnext_sp4_dp4.0.nsys-rep`, the steps remain about 264 ms and have
-little space between them. Each replica keeps its spatial exchanges within
-one node; gradient synchronization also connects the four replicas.
-
-![ConvNeXt spatial and data parallel profile, four replicas retaining the same step duration](../../tutorial_images/convnext_sp4_dp4.png)
-
-The [runbook](../RUNBOOK.md#convnext) has the submission commands and output paths.
+Submit this job. Compare memory use with the unsharded run, check that
+training and validation complete, and inspect the profile for halo exchanges
+during the forward pass and gradient synchronization during backward.
